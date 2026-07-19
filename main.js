@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const { exec } = require('child_process');
+const zlib = require('zlib');
 
 function createWindow() {
   const mainWindow = new BrowserWindow({
@@ -111,6 +112,35 @@ ipcMain.handle('open-file-external', async (_, { name, content, type }) => {
       return { ok: false, error: result };
     }
     return { ok: true, path: tmpPath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-diagrams-url', async (_, content) => {
+  try {
+    if (typeof content !== 'string') content = String(content || '');
+    // Compress with raw deflate and base64url encode
+    const compressed = await new Promise((resolve, reject) => {
+      zlib.deflateRaw(Buffer.from(content, 'utf8'), (err, buf) => {
+        if (err) return reject(err);
+        resolve(buf);
+      });
+    });
+    const b64 = compressed.toString('base64');
+    // convert to base64url
+    const b64url = b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    const url = `https://app.diagrams.net/#R${b64url}`;
+    return { ok: true, url };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('open-external-url', async (_, url) => {
+  try {
+    await shell.openExternal(url);
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
   }
