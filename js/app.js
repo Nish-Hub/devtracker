@@ -219,6 +219,29 @@ async function openInDrawio(){const project=activeProject();if(!project.architec
   const w=window.open();w.document.write(project.architecture.content);return;}
 // Try direct diagrams.net web import using compressed encoding when available (desktop main can compress)
 if(window.desktopApi?.getDiagramsNetUrl){try{const res=await window.desktopApi.getDiagramsNetUrl(project.architecture.content);if(res && res.ok && res.url){if(window.desktopApi.openExternalUrl){await window.desktopApi.openExternalUrl(res.url);toast('Opening diagram in diagrams.net (browser).');}else{window.open(res.url,'_blank');}return;}else{console.warn('getDiagramsNetUrl failed',res);}}catch(err){console.error('diagrams URL generation failed',err);} }
+// If running in a plain browser with pako available, perform client-side compression and open diagrams.net
+if(!window.desktopApi?.getDiagramsNetUrl && window.pako){try{
+  let content = project.architecture.content || '';
+  // If content is a data URL, attempt to extract text portion
+  const dataUrlMatch = typeof content === 'string' && content.match(/^data:(.*?)(;base64)?,(.*)$/);
+  if(dataUrlMatch){const isBase64 = !!dataUrlMatch[2];const dataPart = dataUrlMatch[3];content = isBase64 ? atob(dataPart) : decodeURIComponent(dataPart);} 
+  const compressed = window.pako.deflateRaw(content, { level: 6 });
+  // base64url
+  let b64 = '';
+  if(typeof Buffer !== 'undefined'){
+    b64 = Buffer.from(compressed).toString('base64');
+  } else {
+    // browser: convert Uint8Array to binary string
+    let binary = '';
+    for(let i=0;i<compressed.length;i++) binary += String.fromCharCode(compressed[i]);
+    b64 = btoa(binary);
+  }
+  const b64url = b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  const url = `https://app.diagrams.net/#R${b64url}`;
+  window.open(url, '_blank');
+  toast('Opening diagram in diagrams.net (browser).');
+  return;
+}catch(err){console.error('client-side diagrams.net compression failed',err);} }
 // Fallback: prefer external editor if available
 if(window.desktopApi?.openFileInExternalEditor){openInExternalEditor();return;} // otherwise provide a download and open instructions for diagrams.net web
 const blob=new Blob([project.architecture.content],{type:project.architecture.type||'application/xml'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=project.architecture.name||'diagram.drawio';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);toast('File downloaded. Open it in diagrams.net (app.diagrams.net) or upload via the web app.');}
