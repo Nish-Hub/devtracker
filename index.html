@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12211e">
+  <title>DevTracker · AI-ready engineering workspace</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="DevTracker home"><span class="brand-mark">DT</span><span>Dev<span>Tracker</span></span></a>
+    <div class="project-name"><span class="eyebrow">ACTIVE WORKSPACE</span><strong id="projectName">ContextRAG MVP</strong></div>
+    <div class="header-actions">
+      <button class="button quiet" id="importButton">Import</button>
+      <button class="button quiet" id="exportButton">Export</button>
+      <input id="importInput" type="file" accept="application/json" hidden>
+      <button class="button quiet" id="aiSettingsButton">AI</button>
+      <button class="button primary" id="newTicketButton">+ Ticket</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="rail">
+      <button class="nav-item active" data-view="map"><span>⌘</span> Workspace</button>
+      <button class="nav-item" data-view="decisions"><span>◇</span> Decisions <em id="decisionCount"></em></button>
+      <button class="nav-item" data-view="questions"><span>?</span> Questions <em id="questionCount"></em></button>
+      <div class="rail-footer"><span class="save-indicator" id="saveIndicator">● Saved locally</span></div>
+    </aside>
+
+    <section class="workspace" id="mapView">
+      <div class="workspace-head">
+        <div>
+          <p class="eyebrow">ENGINEERING WORKSPACE</p>
+          <h1>Build with a shared memory.</h1>
+          <p class="subcopy">Pick an unblocked ticket, bring its context into your AI session, then capture what changed.</p>
+        </div>
+        <div class="progress-card"><span>PROJECT PROGRESS</span><strong id="doneProgress">0 / 10</strong><div class="progress-track"><i id="progressBar"></i></div></div>
+      </div>
+
+      <section class="next-up" id="nextUp"></section>
+      <section class="map-card">
+        <div class="section-title"><div><p class="eyebrow">DEPENDENCY MAP</p><h2>Delivery path</h2></div><div class="legend"><span><i class="dot todo"></i> Todo</span><span><i class="dot active"></i> In progress</span><span><i class="dot done"></i> Done</span></div></div>
+        <div class="graph-scroll"><svg id="graph" role="img" aria-label="Ticket dependency map"></svg></div>
+      </section>
+    </section>
+
+    <section class="side-panel" id="ticketPanel">
+      <div class="empty-state" id="emptyTicket"><span class="empty-icon">↗</span><h2>Choose a ticket</h2><p>Select a card on the map to see its brief, activity, and definition of done.</p></div>
+      <div id="ticketDetails" hidden></div>
+    </section>
+
+    <section class="list-view" id="decisionsView" hidden></section>
+    <section class="list-view" id="questionsView" hidden></section>
+  </main>
+
+  <dialog id="ticketDialog" class="dialog wide"></dialog>
+  <dialog id="reportDialog" class="dialog"></dialog>
+  <dialog id="aiDialog" class="dialog wide"></dialog>
+  <dialog id="decisionDialog" class="dialog"></dialog>
+  <dialog id="questionDialog" class="dialog"></dialog>
+  <div class="toast" id="toast" role="status"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
