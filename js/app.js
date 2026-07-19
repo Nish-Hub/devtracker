@@ -370,9 +370,9 @@ async function openInDrawio() {
   toast('File downloaded. Open it in diagrams.net (app.diagrams.net) or upload via the web app.');
 }
 
-async function aiEnhanceArchitecture(){const project=activeProject();const desc=project.architecture?.description||'';const name=project.architecture?.name||project.name||'Project architecture';const prompt=`Review the following architecture description and suggest concrete improvements, missing concerns, and a concise revised description.\n\nName: ${name}\n\nCurrent description:\n${desc}\n\nProvide:\n1) Short summary of improvements\n2) Bullet list of suggested changes or considerations\n3) A concise revised description (1 paragraph)`;try{const text=await requestAiText(prompt);openTextDialog('AI suggested architecture improvements',text); // allow copy/apply
- // Offer to apply revised description if it includes a 'revised description' section — user can copy manually
-}catch(err){toast(err.message);} }
+async function aiEnhanceArchitecture() {
+ return aiEnhanceArchitectureAgent();
+}
 
 
 function renderGit(){const el=$('#gitView');if(!el)return;el.innerHTML=`<div class="view-head"><div><p class="eyebrow">GIT HISTORY</p><h1>Local repository history</h1><p class="subcopy">Inspect recent local commits from the current project repository.</p></div></div><div class="list-card"><p>Loading git history…</p></div>`;const card=el.querySelector('.list-card');if(!window.desktopApi?.getGitLog){card.innerHTML=`<p>Git history is available only in the desktop app.</p>`;return;} if(gitHistoryCache){card.innerHTML=renderGitEntries(gitHistoryCache);return;} window.desktopApi.getGitLog().then(entries=>{gitHistoryCache=entries;card.innerHTML=renderGitEntries(entries);}).catch(err=>{card.innerHTML=`<p>Unable to load git history: ${esc(err.message)}</p>`;});}
@@ -386,17 +386,6 @@ function exportState(){const blob=new Blob([JSON.stringify(workspace,null,2)],{t
 function importState(file){const reader=new FileReader();reader.onload=()=>{try{const data=JSON.parse(reader.result);const imported=migrateWorkspace({...data,version:3});if(!Array.isArray(imported.projects))throw Error();workspace=imported;save();renderAll();toast('Workspace imported.');}catch{toast('That file is not a valid DevTracker workspace.');}};reader.readAsText(file);}
 
 $('#newTicketButton').onclick=()=>openTicketForm();$('#addProjectButton').onclick=()=>addProject();$('#aiSettingsButton').onclick=()=>openAiSettings();$('#exportButton').onclick=exportState;$('#importButton').onclick=()=>$('#importInput').click();$('#importInput').onchange=e=>e.target.files[0]&&importState(e.target.files[0]);document.querySelectorAll('.nav-item').forEach(b=>b.onclick=()=>setView(b.dataset.view));renderAll();
-
-// Delegate architecture button actions to agent-enhanced handlers
-document.addEventListener('click', e => {
-  const t = e.target;
-  if(!t) return;
-  try{
-    if(t.matches && t.matches('#archAiEnhance')){e.preventDefault(); if(typeof aiEnhanceArchitectureAgent==='function') aiEnhanceArchitectureAgent();}
-    if(t.matches && t.matches('#archOpenExternal')){e.preventDefault(); if(typeof openInExternalEditor==='function') openInExternalEditor();}
-    if(t.matches && t.matches('#archOpenDrawio')){e.preventDefault(); if(typeof openInDrawio==='function') openInDrawio();}
-  }catch(err){console.error(err);} 
-});
 
 // Architecture agent helpers
 function extractRevisedDescription(text) {
