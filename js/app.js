@@ -240,6 +240,52 @@ function importState(file){const reader=new FileReader();reader.onload=()=>{try{
 
 $('#newTicketButton').onclick=()=>openTicketForm();$('#addProjectButton').onclick=()=>addProject();$('#aiSettingsButton').onclick=()=>openAiSettings();$('#exportButton').onclick=exportState;$('#importButton').onclick=()=>$('#importInput').click();$('#importInput').onchange=e=>e.target.files[0]&&importState(e.target.files[0]);document.querySelectorAll('.nav-item').forEach(b=>b.onclick=()=>setView(b.dataset.view));renderAll();
 
+// Delegate architecture button actions to agent-enhanced handlers
+document.addEventListener('click', e => {
+  const t = e.target;
+  if(!t) return;
+  try{
+    if(t.matches && t.matches('#archAiEnhance')){e.preventDefault(); if(typeof aiEnhanceArchitectureAgent==='function') aiEnhanceArchitectureAgent();}
+    if(t.matches && t.matches('#archOpenExternal')){e.preventDefault(); if(typeof openInExternalEditor==='function') openInExternalEditor();}
+    if(t.matches && t.matches('#archOpenDrawio')){e.preventDefault(); if(typeof openInDrawio==='function') openInDrawio();}
+  }catch(err){console.error(err);} 
+});
+
+// Architecture agent helpers
+function extractRevisedDescription(text){if(!text) return '';const m=text.match(/REVISED DESCRIPTION[:\-]?\s*\n([\s\S]*)/i);if(m && m[1]){const part=m[1].trim();const paragraphs=part.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);return paragraphs[0]||part;}const m2=text.match(/(?:^|\n)\s*(?:3\)|3\.|3-|A concise revised description)\s*[:\-]?\s*\n([\s\S]*)/i);if(m2 && m2[1]){const part=m2[1].trim();return part.split(/\n\s*\n/)[0].trim();}const parts=text.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);if(parts.length) return parts[parts.length-1];return text.trim();}
+
+function extractImprovementsList(text){if(!text) return [];let m = text.match(/(?:\n|^)\s*(?:2\)|2\.|2-|Suggestions|Suggested changes|Suggested improvements)[:\s\-]*\n([\s\S]*?)(?:\n\s*(?:3\)|3\.|3-|REVISED DESCRIPTION|A concise revised description|$))/i);if(m && m[1]){const block = m[1].trim();const items = block.split(/\n/).map(l=>l.replace(/^\s*[-*\d\.\)\s]+/,'').trim()).filter(Boolean);if(items.length) return items;}const bullets = (text.match(/^\s*[-*]\s+.+$/gm) || []).map(l=>l.replace(/^\s*[-*]\s+/,'').trim());if(bullets.length) return bullets;const para = extractRevisedDescription(text);return para ? para.split(/\.|;|\n/).map(s=>s.trim()).filter(Boolean).slice(0,8) : [];}
+
+async function aiEnhanceArchitectureAgent(){const project=activeProject();const archDesc=project.architecture?.description||'';const name=project.architecture?.name||project.name||'Project architecture';const decisions=(project.decisions||[]).slice(-8).map(d=>`- ${d.id}: ${d.decision}`).join('\n')||'None';const questions=(project.questions||[]).filter(q=>!q.resolved).slice(0,8).map(q=>`- ${q.id}: ${q.text}`).join('\n')||'None';const tickets=(project.tickets||[]).slice(0,6).map(t=>`- ${t.id}: ${t.title} [${t.status}]`).join('\n')||'None';const prompt=`You are an expert software architecture agent. Act as an architectural reviewer for this project and produce concrete, actionable improvements. Use the project context and focus on maintainability, scalability, security, operability, and developer ergonomics.
+
+Project: ${project.name||'Unnamed'} (${project.code||project.id||'N/A'})
+Project description:
+${project.description||'No high-level project description provided.'}
+
+Recent decisions (most recent up to 8):
+${decisions}
+
+Open questions (most important):
+${questions}
+
+Representative tickets (up to 6):
+${tickets}
+
+Current architecture description:
+${archDesc||'<no description>'}
+
+Current file name/type: ${project.architecture?.name||'none'} / ${project.architecture?.type||'unknown'}
+
+Deliverable:
+1) Executive summary (2-4 sentences) highlighting the top 3 priorities or risks.
+2) A numbered list of concrete suggested changes or checklist items the team can act on (each short, actionable).
+3) A concise revised architecture description (one paragraph) labeled 'REVISED DESCRIPTION:'.
+4) Optional notes for follow-up tickets or migration steps (short bulleted list).
+
+Return plain text; structure the response clearly using numbered sections or headings so the client can extract the revised description and improvements.`;try{const text=await requestAiText(prompt);const revised=extractRevisedDescription(text);const improvements=extractImprovementsList(text);openAiSuggestionDialogV2('Architecture enhancement (AI agent)',text,revised,improvements);}catch(err){toast(err.message);} }
+
+function openAiSuggestionDialogV2(title,fullText,suggested,improvements){const project=activeProject();const d=$('#reportDialog');d.innerHTML=`<form class="dialog-body"><h2>${esc(title)}</h2><p class="subcopy">AI architecture agent response. Review and optionally apply the suggested description or improvements to the project's architecture.</p><div class="field"><label>Full AI output</label><textarea id="aiFullOutput" style="min-height:220px">${esc(fullText)}</textarea></div><div class="field"><label>Suggested concise revised description (extracted)</label><textarea id="aiSuggested" style="min-height:100px">${esc(suggested)}</textarea></div><div class="field"><label>Suggested improvements / checklist</label><textarea id="aiImprovements" style="min-height:120px">${esc((improvements||[]).join("\n"))}</textarea></div><div class="dialog-actions"><button class="button" type="button" data-copy>Copy</button><button class="button" type="button" data-apply>Apply revised description</button><button class="button" type="button" data-apply-impr>Apply improvements as notes</button><button class="button" type="button" data-close>Close</button></div></form>`;d.querySelector('[data-close]').onclick=()=>d.close();d.querySelector('[data-copy]').onclick=async()=>{const area=$('#aiFullOutput');try{await navigator.clipboard.writeText(area.value);toast('AI output copied to clipboard.');}catch{toast('Copy failed; select and copy manually.');}};d.querySelector('[data-apply]').onclick=()=>{const val=$('#aiSuggested').value.trim();if(!val){toast('No suggested text to apply.');return;}const p=activeProject();p.architecture=p.architecture||{};p.architecture.description=val;save();renderAll();toast('Applied AI suggestion to architecture description.');d.close();};d.querySelector('[data-apply-impr]').onclick=()=>{const txt=$('#aiImprovements').value.trim();if(!txt){toast('No improvements to apply.');return;}const items=txt.split(/\n/).map(s=>s.trim()).filter(Boolean);const p=activeProject();p.architecture=p.architecture||{};p.architecture.improvements=p.architecture.improvements||[];p.architecture.improvements.push(...items);save();renderAll();toast('Applied improvements to architecture notes.');d.close();};d.showModal();}
+
 // --- Desktop/external editor + AI apply enhancements ---
 function extractRevisedDescription(text){if(!text) return '';const m=text.match(/(?:^|\n)\s*(?:3\)|3\.|3-|Revised description[:\-]?)[^\n]*\n([\s\S]*)/i);if(m && m[1]){const part=m[1].trim();const paragraphs=part.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);return paragraphs[0]||part;}const parts=text.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);if(parts.length) return parts[parts.length-1];return text.trim();}
 
