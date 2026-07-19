@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const { exec } = require('child_process');
@@ -80,4 +80,38 @@ ipcMain.handle('get-git-log', async () => {
       resolve(entries);
     });
   });
+});
+
+ipcMain.handle('open-file-external', async (_, { name, content, type }) => {
+  try {
+    let buffer;
+    if (typeof content === 'string' && content.startsWith('data:')) {
+      const m = content.match(/^data:([^;]+)(;base64)?,(.*)$/);
+      if (m) {
+        const isBase64 = !!m[2];
+        const dataPart = m[3];
+        buffer = isBase64 ? Buffer.from(dataPart, 'base64') : Buffer.from(decodeURIComponent(dataPart), 'utf8');
+      } else {
+        buffer = Buffer.from(content, 'utf8');
+      }
+    } else if (typeof content === 'string') {
+      buffer = Buffer.from(content, 'utf8');
+    } else if (Buffer.isBuffer(content)) {
+      buffer = content;
+    } else {
+      buffer = Buffer.from(String(content), 'utf8');
+    }
+
+    const safeName = (name || 'diagram').replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const tmpPath = path.join(app.getPath('temp'), `devtracker-${Date.now()}-${safeName}`);
+    await fs.writeFile(tmpPath, buffer);
+
+    const result = await shell.openPath(tmpPath);
+    if (result) {
+      return { ok: false, error: result };
+    }
+    return { ok: true, path: tmpPath };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 });
