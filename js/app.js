@@ -206,85 +206,169 @@ function renderContext(){
   });
 }
 
-function requestAiText(prompt){const provider=activeProvider();if(provider.type==='local'||!provider.apiKey||!provider.endpoint){return Promise.resolve(`Local AI placeholder:\n\n${prompt.split('\n').slice(0,6).join('\n')}`);}const headers={'Content-Type':'application/json'};if(provider.apiKey)headers.Authorization='Bearer '+provider.apiKey;const payload={messages:[{role:'system',content:'You are an expert software architect and writing assistant.'},{role:'user',content:prompt}],temperature:0.2};if(provider.model)payload.model=provider.model;return fetch(provider.endpoint,{method:'POST',headers,body:JSON.stringify(payload)}).then(async res=>{if(!res.ok){const err=await res.text().catch(()=>'');throw Error(`AI request failed (${res.status})${err?`: ${err.slice(0,120)}`:''}`);}const data=await res.json();return data.choices?.[0]?.message?.content || data.output_text || data.result || ''});}
+function requestAiText(prompt) {
+  const provider = activeProvider();
+  if (provider.type === 'local' || !provider.apiKey || !provider.endpoint) {
+    return Promise.resolve(`Local AI placeholder:\n\n${prompt.split('\n').slice(0, 6).join('\n')}`);
+  }
+  const headers = { 'Content-Type': 'application/json' };
+  if (provider.apiKey) headers.Authorization = 'Bearer ' + provider.apiKey;
+  const payload = {
+    messages: [
+      { role: 'system', content: 'You are an expert software architect and writing assistant.' },
+      { role: 'user', content: prompt }
+    ],
+    temperature: 0.2
+  };
+  if (provider.model) payload.model = provider.model;
+  return fetch(provider.endpoint, { method: 'POST', headers, body: JSON.stringify(payload) }).then(async res => {
+    if (!res.ok) {
+      const errorText = await res.text().catch(() => '');
+      throw Error(`AI request failed (${res.status})${errorText ? `: ${errorText.slice(0, 120)}` : ''}`);
+    }
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content || data.output_text || data.result || '';
+  });
+}
 
-function renderArchitecture(){const el=$('#architectureView');if(!el)return;const project=activeProject();el.innerHTML=`<div class="view-head"><div><p class="eyebrow">ARCHITECTURE</p><h1>Architecture uploader & preview</h1><p class="subcopy">Upload diagram files (.png, .jpg, .svg, .drawio) or paste a description. Preview and open in your preferred editor.</p></div><div><button class="button" id="archUploadBtn">Upload</button><button class="button" id="archOpenDrawio">Open in diagrams.net</button><button class="button" id="archOpenExternal">Open in external editor</button><button class="button primary" id="archAiEnhance">AI enhance</button></div></div><div class="list-card"><div style="padding:18px"><input type="file" id="archInput" accept=".png,.jpg,.jpeg,.svg,.drawio,.xml" style="display:none"><div id="archPreview">${project.architecture && project.architecture.content?renderArchitecturePreviewHtml(project.architecture):'<p>No architecture uploaded yet.</p>'}</div><div style="margin-top:12px"><label>Description</label><textarea id="archDescription" style="width:100%;min-height:120px">${esc(project.architecture?.description || '')}</textarea></div></div></div>`;$('#archUploadBtn').onclick=()=>$('#archInput').click();const input=$('#archInput');input.onchange=e=>{const f=e.target.files[0];if(f)handleArchitectureFile(f);};$('#archOpenDrawio').onclick=()=>openInDrawio();$('#archOpenExternal').onclick=()=>openInExternalEditor();$('#archAiEnhance').onclick=()=>aiEnhanceArchitecture();const descEl=$('#archDescription');if(descEl){descEl.oninput=e=>{const p=activeProject();p.architecture=p.architecture||{};p.architecture.description=e.target.value;save();};} }
+function renderArchitecture() {
+  const el = $('#architectureView');
+  if (!el) return;
+  const project = activeProject();
+  el.innerHTML = `<div class="view-head"><div><p class="eyebrow">ARCHITECTURE</p><h1>Architecture uploader & preview</h1><p class="subcopy">Upload diagram files (.png, .jpg, .svg, .drawio) or paste a description. Preview and open in your preferred editor.</p></div><div><button class="button" id="archUploadBtn">Upload</button><button class="button" id="archOpenDrawio">Open in diagrams.net</button><button class="button" id="archOpenExternal">Open in external editor</button><button class="button primary" id="archAiEnhance">AI enhance</button></div></div><div class="list-card"><div style="padding:18px"><input type="file" id="archInput" accept=".png,.jpg,.jpeg,.svg,.drawio,.xml" style="display:none"><div id="archPreview">${project.architecture && project.architecture.content ? renderArchitecturePreviewHtml(project.architecture) : '<p>No architecture uploaded yet.</p>'}</div><div style="margin-top:12px"><label>Description</label><textarea id="archDescription" style="width:100%;min-height:120px">${esc(project.architecture?.description || '')}</textarea></div></div></div>`;
+  $('#archUploadBtn').onclick = () => $('#archInput').click();
+  const input = $('#archInput');
+  input.onchange = e => {
+    const file = e.target.files[0];
+    if (file) handleArchitectureFile(file);
+  };
+  $('#archOpenDrawio').onclick = () => openInDrawio();
+  $('#archOpenExternal').onclick = () => openInExternalEditor();
+  $('#archAiEnhance').onclick = () => aiEnhanceArchitecture();
+  const descEl = $('#archDescription');
+  if (descEl) {
+    descEl.oninput = e => {
+      const projectState = activeProject();
+      projectState.architecture = projectState.architecture || {};
+      projectState.architecture.description = e.target.value;
+      save();
+    };
+  }
+}
 
 function renderArchitecturePreviewHtml(arch){if(!arch) return '<p>No architecture available.</p>';if((arch.type && arch.type.startsWith('image/')) || (arch.content && arch.content.startsWith('data:'))){return `<div style="text-align:center"><img src="${arch.content}" alt="${esc(arch.name)}" style="max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px"/></div>`;}if(arch.type==='svg' || (arch.name && arch.name.toLowerCase().endsWith('.svg'))){return `<div class="svg-preview">${arch.content}</div>`;}return `<div><p><strong>${esc(arch.name)}</strong></p><pre style="white-space:pre-wrap;max-height:360px;overflow:auto;border:1px solid var(--line);padding:10px">${esc(String(arch.content || '').slice(0,4000))}${String(arch.content || '').length>4000? '\n\n…truncated':''}</pre><p><small>${esc(arch.type||'')}</small></p></div>`;}
 
 function handleArchitectureFile(file){const reader=new FileReader();reader.onload=()=>{const project=activeProject();const text=reader.result;let type=file.type||'';if(file.name.toLowerCase().endsWith('.svg')) type='svg';if(type.startsWith('image/')||type==='svg'){project.architecture={name:file.name,type:type,content:text,description:project.architecture?.description||''};save();renderAll();toast('Architecture uploaded and previewed.');return;} // otherwise treat as text/xml (drawio)
 project.architecture={name:file.name,type:file.type||'xml',content:text,description:project.architecture?.description||''};save();renderAll();toast('Architecture uploaded. Use "Open in diagrams.net" to view or download.');};if(file.name.toLowerCase().endsWith('.png')||file.name.toLowerCase().endsWith('.jpg')||file.name.toLowerCase().endsWith('.jpeg')||file.name.toLowerCase().endsWith('.svg')){reader.readAsDataURL(file);}else{reader.readAsText(file);} }
 
-async function openInDrawio(){const project=activeProject();if(!project.architecture || !project.architecture.content){toast('No architecture to open.');return;}if(project.architecture.type==='svg' || project.architecture.name.toLowerCase().endsWith('.svg')){ // open SVG in new tab
-  const w=window.open();w.document.write(project.architecture.content);return;}
-// Try direct diagrams.net web import using compressed encoding when available (desktop main can compress)
-if(window.desktopApi?.getDiagramsNetUrl){try{const res=await window.desktopApi.getDiagramsNetUrl(project.architecture.content);if(res && res.ok && res.url){if(window.desktopApi.openExternalUrl){await window.desktopApi.openExternalUrl(res.url);toast('Opening diagram in diagrams.net (browser).');}else{window.open(res.url,'_blank');}return;}else{console.warn('getDiagramsNetUrl failed',res);}}catch(err){console.error('diagrams URL generation failed',err);} }
-// If running in a plain browser, try to load bundled pako and perform client-side compression to open diagrams.net
-if(!window.desktopApi?.getDiagramsNetUrl){
-  try{
-    await ensurePako();
-    if(window.pako){
-      let content = project.architecture.content || '';
-      // If content is a data URL, attempt to extract text portion
-      const dataUrlMatch = typeof content === 'string' && content.match(/^data:(.*?)(;base64)?,(.*)$/);
-      if(dataUrlMatch){const isBase64 = !!dataUrlMatch[2];const dataPart = dataUrlMatch[3];content = isBase64 ? atob(dataPart) : decodeURIComponent(dataPart);} 
-      // Basic validation: ensure content looks like draw.io XML
-      const preview = String(content).slice(0,300).toLowerCase();
-      if(!(preview.includes('<?xml') || preview.includes('<mxfile') || preview.includes('<diagram'))){
-        // Not an XML diagram — show friendly error
-        openTextDialog('Unable to open in diagrams.net','The selected file does not appear to be a draw.io (.drawio/.xml) diagram.\n\nPlease make sure you uploaded the raw draw.io XML file (not a PNG/JPEG or compressed/encoded file). You can also download the file and open it manually in app.diagrams.net.');
+async function openInDrawio() {
+  const project = activeProject();
+  if (!project.architecture || !project.architecture.content) {
+    toast('No architecture to open.');
+    return;
+  }
+  if (project.architecture.type === 'svg' || project.architecture.name.toLowerCase().endsWith('.svg')) {
+    const popup = window.open();
+    if (popup) {
+      popup.document.write(project.architecture.content);
+    }
+    return;
+  }
+
+  if (window.desktopApi?.getDiagramsNetUrl) {
+    try {
+      const res = await window.desktopApi.getDiagramsNetUrl(project.architecture.content);
+      if (res && res.ok && res.url) {
+        if (window.desktopApi.openExternalUrl) {
+          await window.desktopApi.openExternalUrl(res.url);
+          toast('Opening diagram in diagrams.net (browser).');
+        } else {
+          window.open(res.url, '_blank');
+        }
         return;
       }
-      // Warn if content is large
-      if(String(content).length > 200000){
-        if(!confirm('The diagram is large and may not open via URL. Would you like to download it instead?')){
+      console.warn('getDiagramsNetUrl failed', res);
+    } catch (err) {
+      console.error('diagrams URL generation failed', err);
+    }
+  }
+
+  if (!window.desktopApi?.getDiagramsNetUrl) {
+    try {
+      await ensurePako();
+      if (window.pako) {
+        let content = project.architecture.content || '';
+        const dataUrlMatch = typeof content === 'string' && content.match(/^data:(.*?)(;base64)?,(.*)$/);
+        if (dataUrlMatch) {
+          const isBase64 = !!dataUrlMatch[2];
+          const dataPart = dataUrlMatch[3];
+          content = isBase64 ? atob(dataPart) : decodeURIComponent(dataPart);
+        }
+        const preview = String(content).slice(0, 300).toLowerCase();
+        if (!(preview.includes('<?xml') || preview.includes('<mxfile') || preview.includes('<diagram'))) {
+          openTextDialog('Unable to open in diagrams.net', 'The selected file does not appear to be a draw.io (.drawio/.xml) diagram.\n\nPlease make sure you uploaded the raw draw.io XML file (not a PNG/JPEG or compressed/encoded file). You can also download the file and open it manually in app.diagrams.net.');
+          return;
+        }
+        if (String(content).length > 200000 && !confirm('The diagram is large and may not open via URL. Would you like to download it instead?')) {
           // proceed, but warn
         }
-      }
 
-      // Ensure we compress UTF-8 bytes (TextEncoder) so multibyte characters encode correctly
-      const utf8 = (typeof TextEncoder !== 'undefined') ? new TextEncoder().encode(content) : (function(){
-        // fallback: naive encoding
-        const arr = new Uint8Array(content.length);
-        for(let i=0;i<content.length;i++) arr[i] = content.charCodeAt(i);
-        return arr;
-      })();
+        const utf8 = typeof TextEncoder !== 'undefined'
+          ? new TextEncoder().encode(content)
+          : (() => {
+            const arr = new Uint8Array(content.length);
+            for (let index = 0; index < content.length; index += 1) arr[index] = content.charCodeAt(index);
+            return arr;
+          })();
 
-      const compressed = window.pako.deflateRaw(utf8, { level: 6 });
+        const compressed = window.pako.deflateRaw(utf8, { level: 6 });
 
-      // helper: convert Uint8Array to base64 in browser safely
-      function uint8ToBase64(u8){
-        const CHUNK_SIZE = 0x8000;
-        let index = 0;
-        const length = u8.length;
-        let result = '';
-        while(index < length){
-          const slice = u8.subarray(index, Math.min(index + CHUNK_SIZE, length));
-          result += String.fromCharCode.apply(null, slice);
-          index += CHUNK_SIZE;
+        const uint8ToBase64 = u8 => {
+          const chunkSize = 0x8000;
+          let index = 0;
+          const length = u8.length;
+          let result = '';
+          while (index < length) {
+            const slice = u8.subarray(index, Math.min(index + chunkSize, length));
+            result += String.fromCharCode.apply(null, slice);
+            index += chunkSize;
+          }
+          return btoa(result);
+        };
+
+        let b64 = '';
+        if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+          b64 = Buffer.from(compressed).toString('base64');
+        } else {
+          b64 = uint8ToBase64(compressed);
         }
-        return btoa(result);
-      }
 
-      let b64 = '';
-      if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function'){
-        // Node/Electron environment
-        b64 = Buffer.from(compressed).toString('base64');
-      } else {
-        b64 = uint8ToBase64(compressed);
+        const b64url = b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+        const url = `https://app.diagrams.net/#R${b64url}`;
+        window.open(url, '_blank');
+        toast('Opening diagram in diagrams.net (browser).');
+        return;
       }
-
-      const b64url = b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-      const url = `https://app.diagrams.net/#R${b64url}`;
-      window.open(url, '_blank');
-      toast('Opening diagram in diagrams.net (browser).');
-      return;
+    } catch (err) {
+      console.error('client-side diagrams.net compression failed', err);
     }
-  }catch(err){console.error('client-side diagrams.net compression failed',err);} 
+  }
+
+  if (window.desktopApi?.openFileInExternalEditor) {
+    openInExternalEditor();
+    return;
+  }
+  const blob = new Blob([project.architecture.content], { type: project.architecture.type || 'application/xml' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = project.architecture.name || 'diagram.drawio';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  toast('File downloaded. Open it in diagrams.net (app.diagrams.net) or upload via the web app.');
 }
-// Fallback: prefer external editor if available
-if(window.desktopApi?.openFileInExternalEditor){openInExternalEditor();return;} // otherwise provide a download and open instructions for diagrams.net web
-const blob=new Blob([project.architecture.content],{type:project.architecture.type||'application/xml'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=project.architecture.name||'diagram.drawio';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);toast('File downloaded. Open it in diagrams.net (app.diagrams.net) or upload via the web app.');}
 
 async function aiEnhanceArchitecture(){const project=activeProject();const desc=project.architecture?.description||'';const name=project.architecture?.name||project.name||'Project architecture';const prompt=`Review the following architecture description and suggest concrete improvements, missing concerns, and a concise revised description.\n\nName: ${name}\n\nCurrent description:\n${desc}\n\nProvide:\n1) Short summary of improvements\n2) Bullet list of suggested changes or considerations\n3) A concise revised description (1 paragraph)`;try{const text=await requestAiText(prompt);openTextDialog('AI suggested architecture improvements',text); // allow copy/apply
  // Offer to apply revised description if it includes a 'revised description' section — user can copy manually
@@ -315,12 +399,38 @@ document.addEventListener('click', e => {
 });
 
 // Architecture agent helpers
-function extractRevisedDescription(text){if(!text) return '';const m=text.match(/REVISED DESCRIPTION[:\-]?\s*\n([\s\S]*)/i);if(m && m[1]){const part=m[1].trim();const paragraphs=part.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);return paragraphs[0]||part;}const m2=text.match(/(?:^|\n)\s*(?:3\)|3\.|3-|A concise revised description)\s*[:\-]?\s*\n([\s\S]*)/i);if(m2 && m2[1]){const part=m2[1].trim();return part.split(/\n\s*\n/)[0].trim();}const parts=text.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);if(parts.length) return parts[parts.length-1];return text.trim();}
+function extractRevisedDescription(text) {
+  if (!text) return '';
+  const normalized = String(text).replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n');
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (/^revised description:/i.test(line) || /^3(?:\.|\)|:|-)/i.test(line)) {
+      const section = lines.slice(index + 1).join('\n').trim();
+      const paragraphs = section.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean);
+      return paragraphs[0] || section;
+    }
+  }
+  const paragraphs = normalized.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean);
+  return paragraphs[paragraphs.length - 1] || normalized.trim();
+}
 
-function extractImprovementsList(text){if(!text) return [];let m = text.match(/(?:\n|^)\s*(?:2\)|2\.|2-|Suggestions|Suggested changes|Suggested improvements)[:\s\-]*\n([\s\S]*?)(?:\n\s*(?:3\)|3\.|3-|REVISED DESCRIPTION|A concise revised description|$))/i);if(m && m[1]){const block = m[1].trim();const items = block.split(/\n/).map(l=>l.replace(/^\s*[-*\d\.\)\s]+/,'').trim()).filter(Boolean);if(items.length) return items;}const bullets = (text.match(/^\s*[-*]\s+.+$/gm) || []).map(l=>l.replace(/^\s*[-*]\s+/,'').trim());if(bullets.length) return bullets;const para = extractRevisedDescription(text);return para ? para.split(/\.|;|\n/).map(s=>s.trim()).filter(Boolean).slice(0,8) : [];}
+function extractImprovementsList(text) {
+  if (!text) return [];
+  const normalized = String(text).replace(/\r\n/g, '\n');
+  const lines = normalized.split('\n').map(line => line.trim()).filter(Boolean);
+  const items = [];
+  for (const line of lines) {
+    if (/^(executive summary|revised description|follow-up|notes)$/i.test(line)) continue;
+    if (/^(suggested changes|suggested improvements|suggestions|improvements)$/i.test(line)) continue;
+    const cleaned = line.replace(/^[-*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim();
+    if (cleaned) items.push(cleaned);
+  }
+  return items.slice(0, 8);
+}
 
 async function aiEnhanceArchitectureAgent(){const project=activeProject();const btn = document.querySelector('#archAiEnhance');if(btn) {btn.disabled = true; btn.textContent = 'Analyzing...';}
-  const archDesc=project.architecture?.description||'';const name=project.architecture?.name||project.name||'Project architecture';const decisions=(project.decisions||[]).slice(-8).map(d=>`- ${d.id}: ${d.decision}`).join('\n')||'None';const questions=(project.questions||[]).filter(q=>!q.resolved).slice(0,8).map(q=>`- ${q.id}: ${q.text}`).join('\n')||'None';const tickets=(project.tickets||[]).slice(0,6).map(t=>`- ${t.id}: ${t.title} [${t.status}]`).join('\n')||'None';const prompt=`You are an expert software architecture agent. Act as an architectural reviewer for this project and produce concrete, actionable improvements. Use the project context and focus on maintainability, scalability, security, operability, and developer ergonomics.
+  const archDesc=project.architecture?.description||'';const decisions=(project.decisions||[]).slice(-8).map(d=>`- ${d.id}: ${d.decision}`).join('\n')||'None';const questions=(project.questions||[]).filter(q=>!q.resolved).slice(0,8).map(q=>`- ${q.id}: ${q.text}`).join('\n')||'None';const tickets=(project.tickets||[]).slice(0,6).map(t=>`- ${t.id}: ${t.title} [${t.status}]`).join('\n')||'None';const prompt=`You are an expert software architecture agent. Act as an architectural reviewer for this project and produce concrete, actionable improvements. Use the project context and focus on maintainability, scalability, security, operability, and developer ergonomics.
 
 Project: ${project.name||'Unnamed'} (${project.code||project.id||'N/A'})
 Project description:
@@ -367,9 +477,35 @@ Return plain text; structure the response clearly using numbered sections or hea
 function openAiSuggestionDialogV2(title,fullText,suggested,improvements){const project=activeProject();const d=$('#reportDialog');d.innerHTML=`<form class="dialog-body"><h2>${esc(title)}</h2><p class="subcopy">AI architecture agent response. Review and optionally apply the suggested description or improvements to the project's architecture.</p><div class="field"><label>Full AI output</label><textarea id="aiFullOutput" style="min-height:220px">${esc(fullText)}</textarea></div><div class="field"><label>Suggested concise revised description (extracted)</label><textarea id="aiSuggested" style="min-height:100px">${esc(suggested)}</textarea></div><div class="field"><label>Suggested improvements / checklist</label><textarea id="aiImprovements" style="min-height:120px">${esc((improvements||[]).join("\n"))}</textarea></div><div class="dialog-actions"><button class="button" type="button" data-copy>Copy</button><button class="button" type="button" data-apply>Apply revised description</button><button class="button" type="button" data-apply-impr>Apply improvements as notes</button><button class="button" type="button" data-close>Close</button></div></form>`;d.querySelector('[data-close]').onclick=()=>d.close();d.querySelector('[data-copy]').onclick=async()=>{const area=$('#aiFullOutput');try{await navigator.clipboard.writeText(area.value);toast('AI output copied to clipboard.');}catch{toast('Copy failed; select and copy manually.');}};d.querySelector('[data-apply]').onclick=()=>{const val=$('#aiSuggested').value.trim();if(!val){toast('No suggested text to apply.');return;}const p=activeProject();p.architecture=p.architecture||{};p.architecture.description=val;save();renderAll();toast('Applied AI suggestion to architecture description.');d.close();};d.querySelector('[data-apply-impr]').onclick=()=>{const txt=$('#aiImprovements').value.trim();if(!txt){toast('No improvements to apply.');return;}const items=txt.split(/\n/).map(s=>s.trim()).filter(Boolean);const p=activeProject();p.architecture=p.architecture||{};p.architecture.improvements=p.architecture.improvements||[];p.architecture.improvements.push(...items);save();renderAll();toast('Applied improvements to architecture notes.');d.close();};d.showModal();}
 
 // --- Desktop/external editor + AI apply enhancements ---
-function extractRevisedDescription(text){if(!text) return '';const m=text.match(/(?:^|\n)\s*(?:3\)|3\.|3-|Revised description[:\-]?)[^\n]*\n([\s\S]*)/i);if(m && m[1]){const part=m[1].trim();const paragraphs=part.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);return paragraphs[0]||part;}const parts=text.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);if(parts.length) return parts[parts.length-1];return text.trim();}
-
-function openAiSuggestionDialog(title,fullText,suggested){const project=activeProject();const d=$('#reportDialog');d.innerHTML=`<form class="dialog-body"><h2>${esc(title)}</h2><p class="subcopy">AI output is below. Review and optionally apply the extracted revised description to the project's architecture.</p><div class="field"><label>Full AI output</label><textarea id="aiFullOutput" style="min-height:260px">${esc(fullText)}</textarea></div><div class="field"><label>Suggested concise revised description (extracted)</label><textarea id="aiSuggested" style="min-height:120px">${esc(suggested)}</textarea></div><div class="dialog-actions"><button class="button" type="button" data-copy>Copy</button><button class="button" type="button" data-apply>Apply as architecture description</button><button class="button" type="button" data-close>Close</button></div></form>`;d.querySelector('[data-close]').onclick=()=>d.close();d.querySelector('[data-copy]').onclick=async()=>{const area=$('#aiFullOutput');try{await navigator.clipboard.writeText(area.value);toast('AI output copied to clipboard.');}catch{toast('Copy failed; select and copy manually.');}};d.querySelector('[data-apply]').onclick=()=>{const val=$('#aiSuggested').value.trim();if(!val){toast('No suggested text to apply.');return;}const p=activeProject();p.architecture=p.architecture||{};p.architecture.description=val;save();renderAll();toast('Applied AI suggestion to architecture description.');d.close();};d.showModal();}
+function openAiSuggestionDialog(title, fullText, suggested) {
+  const d = $('#reportDialog');
+  d.innerHTML = `<form class="dialog-body"><h2>${esc(title)}</h2><p class="subcopy">AI output is below. Review and optionally apply the extracted revised description to the project's architecture.</p><div class="field"><label>Full AI output</label><textarea id="aiFullOutput" style="min-height:260px">${esc(fullText)}</textarea></div><div class="field"><label>Suggested concise revised description (extracted)</label><textarea id="aiSuggested" style="min-height:120px">${esc(suggested)}</textarea></div><div class="dialog-actions"><button class="button" type="button" data-copy>Copy</button><button class="button" type="button" data-apply>Apply as architecture description</button><button class="button" type="button" data-close>Close</button></div></form>`;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('[data-copy]').onclick = async () => {
+    const area = $('#aiFullOutput');
+    try {
+      await navigator.clipboard.writeText(area.value);
+      toast('AI output copied to clipboard.');
+    } catch {
+      toast('Copy failed; select and copy manually.');
+    }
+  };
+  d.querySelector('[data-apply]').onclick = () => {
+    const val = $('#aiSuggested').value.trim();
+    if (!val) {
+      toast('No suggested text to apply.');
+      return;
+    }
+    const projectState = activeProject();
+    projectState.architecture = projectState.architecture || {};
+    projectState.architecture.description = val;
+    save();
+    renderAll();
+    toast('Applied AI suggestion to architecture description.');
+    d.close();
+  };
+  d.showModal();
+}
 
 // Ensure pako is available in the browser by loading the bundled vendor module if necessary
 async function ensurePako(){if(window.pako) return window.pako;try{const m = await import('./vendor/pako.mjs');window.pako = m && (m.default || m);return window.pako;}catch(err){console.warn('Unable to load bundled pako via import:',err);return null;}}
