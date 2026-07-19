@@ -219,29 +219,34 @@ async function openInDrawio(){const project=activeProject();if(!project.architec
   const w=window.open();w.document.write(project.architecture.content);return;}
 // Try direct diagrams.net web import using compressed encoding when available (desktop main can compress)
 if(window.desktopApi?.getDiagramsNetUrl){try{const res=await window.desktopApi.getDiagramsNetUrl(project.architecture.content);if(res && res.ok && res.url){if(window.desktopApi.openExternalUrl){await window.desktopApi.openExternalUrl(res.url);toast('Opening diagram in diagrams.net (browser).');}else{window.open(res.url,'_blank');}return;}else{console.warn('getDiagramsNetUrl failed',res);}}catch(err){console.error('diagrams URL generation failed',err);} }
-// If running in a plain browser with pako available, perform client-side compression and open diagrams.net
-if(!window.desktopApi?.getDiagramsNetUrl && window.pako){try{
-  let content = project.architecture.content || '';
-  // If content is a data URL, attempt to extract text portion
-  const dataUrlMatch = typeof content === 'string' && content.match(/^data:(.*?)(;base64)?,(.*)$/);
-  if(dataUrlMatch){const isBase64 = !!dataUrlMatch[2];const dataPart = dataUrlMatch[3];content = isBase64 ? atob(dataPart) : decodeURIComponent(dataPart);} 
-  const compressed = window.pako.deflateRaw(content, { level: 6 });
-  // base64url
-  let b64 = '';
-  if(typeof Buffer !== 'undefined'){
-    b64 = Buffer.from(compressed).toString('base64');
-  } else {
-    // browser: convert Uint8Array to binary string
-    let binary = '';
-    for(let i=0;i<compressed.length;i++) binary += String.fromCharCode(compressed[i]);
-    b64 = btoa(binary);
-  }
-  const b64url = b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-  const url = `https://app.diagrams.net/#R${b64url}`;
-  window.open(url, '_blank');
-  toast('Opening diagram in diagrams.net (browser).');
-  return;
-}catch(err){console.error('client-side diagrams.net compression failed',err);} }
+// If running in a plain browser, try to load bundled pako and perform client-side compression to open diagrams.net
+if(!window.desktopApi?.getDiagramsNetUrl){
+  try{
+    await ensurePako();
+    if(window.pako){
+      let content = project.architecture.content || '';
+      // If content is a data URL, attempt to extract text portion
+      const dataUrlMatch = typeof content === 'string' && content.match(/^data:(.*?)(;base64)?,(.*)$/);
+      if(dataUrlMatch){const isBase64 = !!dataUrlMatch[2];const dataPart = dataUrlMatch[3];content = isBase64 ? atob(dataPart) : decodeURIComponent(dataPart);} 
+      const compressed = window.pako.deflateRaw(content, { level: 6 });
+      // base64url
+      let b64 = '';
+      if(typeof Buffer !== 'undefined'){
+        b64 = Buffer.from(compressed).toString('base64');
+      } else {
+        // browser: convert Uint8Array to binary string
+        let binary = '';
+        for(let i=0;i<compressed.length;i++) binary += String.fromCharCode(compressed[i]);
+        b64 = btoa(binary);
+      }
+      const b64url = b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+      const url = `https://app.diagrams.net/#R${b64url}`;
+      window.open(url, '_blank');
+      toast('Opening diagram in diagrams.net (browser).');
+      return;
+    }
+  }catch(err){console.error('client-side diagrams.net compression failed',err);} 
+}
 // Fallback: prefer external editor if available
 if(window.desktopApi?.openFileInExternalEditor){openInExternalEditor();return;} // otherwise provide a download and open instructions for diagrams.net web
 const blob=new Blob([project.architecture.content],{type:project.architecture.type||'application/xml'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=project.architecture.name||'diagram.drawio';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);toast('File downloaded. Open it in diagrams.net (app.diagrams.net) or upload via the web app.');}
@@ -313,6 +318,9 @@ function openAiSuggestionDialogV2(title,fullText,suggested,improvements){const p
 function extractRevisedDescription(text){if(!text) return '';const m=text.match(/(?:^|\n)\s*(?:3\)|3\.|3-|Revised description[:\-]?)[^\n]*\n([\s\S]*)/i);if(m && m[1]){const part=m[1].trim();const paragraphs=part.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);return paragraphs[0]||part;}const parts=text.split(/\n\s*\n/).map(p=>p.trim()).filter(Boolean);if(parts.length) return parts[parts.length-1];return text.trim();}
 
 function openAiSuggestionDialog(title,fullText,suggested){const project=activeProject();const d=$('#reportDialog');d.innerHTML=`<form class="dialog-body"><h2>${esc(title)}</h2><p class="subcopy">AI output is below. Review and optionally apply the extracted revised description to the project's architecture.</p><div class="field"><label>Full AI output</label><textarea id="aiFullOutput" style="min-height:260px">${esc(fullText)}</textarea></div><div class="field"><label>Suggested concise revised description (extracted)</label><textarea id="aiSuggested" style="min-height:120px">${esc(suggested)}</textarea></div><div class="dialog-actions"><button class="button" type="button" data-copy>Copy</button><button class="button" type="button" data-apply>Apply as architecture description</button><button class="button" type="button" data-close>Close</button></div></form>`;d.querySelector('[data-close]').onclick=()=>d.close();d.querySelector('[data-copy]').onclick=async()=>{const area=$('#aiFullOutput');try{await navigator.clipboard.writeText(area.value);toast('AI output copied to clipboard.');}catch{toast('Copy failed; select and copy manually.');}};d.querySelector('[data-apply]').onclick=()=>{const val=$('#aiSuggested').value.trim();if(!val){toast('No suggested text to apply.');return;}const p=activeProject();p.architecture=p.architecture||{};p.architecture.description=val;save();renderAll();toast('Applied AI suggestion to architecture description.');d.close();};d.showModal();}
+
+// Ensure pako is available in the browser by loading the bundled vendor module if necessary
+async function ensurePako(){if(window.pako) return window.pako;try{const m = await import('./vendor/pako.mjs');window.pako = m && (m.default || m);return window.pako;}catch(err){console.warn('Unable to load bundled pako via import:',err);return null;}}
 
 async function openInExternalEditor(){const project=activeProject();if(!project.architecture || !project.architecture.content){toast('No architecture to open.');return;}if(window.desktopApi?.openFileInExternalEditor){try{const res=await window.desktopApi.openFileInExternalEditor(project.architecture.name||'diagram',project.architecture.content,project.architecture.type||'application/octet-stream');if(res && res.ok){toast('Opened file in external editor.');return;}else{console.warn('openFileInExternalEditor result',res);} }catch(err){console.error(err);toast('Unable to open external editor.');}}// fallback to download
 const blob=new Blob([project.architecture.content],{type:project.architecture.type||'application/xml'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=project.architecture.name||'diagram.drawio';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);toast('File downloaded. Open it with your external editor or in diagrams.net.');}
