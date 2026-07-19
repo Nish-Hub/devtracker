@@ -1,0 +1,49 @@
+{
+  "name": "devtracker",
+  "version": "0.1.0",
+  "description": "A desktop engineering workspace for human + AI collaboration.",
+  "author": "DevTracker",
+  "license": "MIT",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --mac --dir",
+    "dist": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^26.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.devtracker.app",
+    "productName": "DevTracker",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist",
+      "!node_modules/**/README*",
+      "!node_modules/**/*.md",
+      "!*.log"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": ["dmg"]
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}

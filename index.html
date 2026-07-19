@@ -13,7 +13,14 @@
 <body>
   <header class="topbar">
     <a class="brand" href="#" aria-label="DevTracker home"><span class="brand-mark">DT</span><span>Dev<span>Tracker</span></span></a>
-    <div class="project-name"><span class="eyebrow">ACTIVE WORKSPACE</span><strong id="projectName">ContextRAG MVP</strong></div>
+    <div class="project-name">
+      <span class="eyebrow">ACTIVE WORKSPACE</span>
+      <strong id="projectName">ContextRAG MVP</strong>
+      <div class="project-picker">
+        <select id="projectSelect" aria-label="Select project"></select>
+        <button class="button quiet" id="addProjectButton" type="button">+ Project</button>
+      </div>
+    </div>
     <div class="header-actions">
       <button class="button quiet" id="importButton">Import</button>
       <button class="button quiet" id="exportButton">Export</button>
@@ -26,6 +33,9 @@
   <main class="app-shell">
     <aside class="rail">
       <button class="nav-item active" data-view="map"><span>⌘</span> Workspace</button>
+      <button class="nav-item" data-view="context"><span>✎</span> Context</button>
+      <button class="nav-item" data-view="architecture"><span>🏗</span> Architecture</button>
+      <button class="nav-item" data-view="git"><span>⎇</span> Git</button>
       <button class="nav-item" data-view="decisions"><span>◇</span> Decisions <em id="decisionCount"></em></button>
       <button class="nav-item" data-view="questions"><span>?</span> Questions <em id="questionCount"></em></button>
       <div class="rail-footer"><span class="save-indicator" id="saveIndicator">● Saved locally</span></div>
@@ -53,6 +63,9 @@
       <div id="ticketDetails" hidden></div>
     </section>
 
+    <section class="list-view" id="contextView" hidden></section>
+    <section class="list-view" id="architectureView" hidden></section>
+    <section class="list-view" id="gitView" hidden></section>
     <section class="list-view" id="decisionsView" hidden></section>
     <section class="list-view" id="questionsView" hidden></section>
   </main>
