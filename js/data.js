@@ -5,7 +5,7 @@ const ticket = (id, title, effort, line, deps, description, acceptanceCriteria, 
   definitionOfDone, technicalNotes, status: 'todo', sessions: [], scratchpad: ''
 });
 
-const projectTemplate = (id, name, code, description, tickets, decisions, questions, selectedTicketId) => ({
+const projectTemplate = (id, name, code, description, tickets, decisions, questions, selectedTicketId, architecture = { name: '', type: '', content: '', description: '' }) => ({
   id,
   name,
   code,
@@ -13,7 +13,8 @@ const projectTemplate = (id, name, code, description, tickets, decisions, questi
   tickets,
   decisions,
   questions,
-  selectedTicketId
+  selectedTicketId,
+  architecture
 });
 
 export const DEFAULT_WORKSPACE = {

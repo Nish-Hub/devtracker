@@ -8,11 +8,27 @@
   "scripts": {
     "start": "electron .",
     "pack": "electron-builder --mac --dir",
-    "dist": "electron-builder --mac"
+    "dist": "electron-builder --mac",
+    "lint": "eslint . --ext .js",
+    "format": "prettier --write \"**/*.{js,json,md}\"",
+    "test": "jest --passWithNoTests",
+    "prepare": "husky install"
   },
   "devDependencies": {
     "electron": "^26.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "eslint": "^8.40.0",
+    "prettier": "^2.8.8",
+    "husky": "^8.0.3",
+    "lint-staged": "^13.1.0",
+    "jest": "^29.5.0"
+  },
+  "lint-staged": {
+    "*.js": [
+      "eslint --fix",
+      "prettier --write",
+      "git add"
+    ]
   },
   "build": {
     "appId": "com.devtracker.app",
