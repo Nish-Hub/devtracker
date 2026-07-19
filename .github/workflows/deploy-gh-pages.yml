@@ -21,6 +21,8 @@ jobs:
           mkdir site
           # Copy only the public site files (avoid dist artifacts and node_modules)
           rsync -a --delete index.html css js docs site/ || true
+          # Inject cache-busting query param into the script tag so browsers fetch updated JS
+          sed -i "s|<script type=\"module\" src=\"js/app.js\"></script>|<script type=\"module\" src=\"js/app.js?v=${{ github.sha }}\"></script>|g" site/index.html || true
 
       - name: Deploy to gh-pages
         uses: JamesIves/github-pages-deploy-action@v4
