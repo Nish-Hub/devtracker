@@ -228,18 +228,39 @@ if(!window.desktopApi?.getDiagramsNetUrl){
       // If content is a data URL, attempt to extract text portion
       const dataUrlMatch = typeof content === 'string' && content.match(/^data:(.*?)(;base64)?,(.*)$/);
       if(dataUrlMatch){const isBase64 = !!dataUrlMatch[2];const dataPart = dataUrlMatch[3];content = isBase64 ? atob(dataPart) : decodeURIComponent(dataPart);} 
-      const compressed = window.pako.deflateRaw(content, { level: 6 });
-      // base64url
+      // Ensure we compress UTF-8 bytes (TextEncoder) so multibyte characters encode correctly
+      const utf8 = (typeof TextEncoder !== 'undefined') ? new TextEncoder().encode(content) : (function(){
+        // fallback: naive encoding
+        const arr = new Uint8Array(content.length);
+        for(let i=0;i<content.length;i++) arr[i] = content.charCodeAt(i);
+        return arr;
+      })();
+
+      const compressed = window.pako.deflateRaw(utf8, { level: 6 });
+
+      // helper: convert Uint8Array to base64 in browser safely
+      function uint8ToBase64(u8){
+        const CHUNK_SIZE = 0x8000;
+        let index = 0;
+        const length = u8.length;
+        let result = '';
+        while(index < length){
+          const slice = u8.subarray(index, Math.min(index + CHUNK_SIZE, length));
+          result += String.fromCharCode.apply(null, slice);
+          index += CHUNK_SIZE;
+        }
+        return btoa(result);
+      }
+
       let b64 = '';
-      if(typeof Buffer !== 'undefined'){
+      if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function'){
+        // Node/Electron environment
         b64 = Buffer.from(compressed).toString('base64');
       } else {
-        // browser: convert Uint8Array to binary string
-        let binary = '';
-        for(let i=0;i<compressed.length;i++) binary += String.fromCharCode(compressed[i]);
-        b64 = btoa(binary);
+        b64 = uint8ToBase64(compressed);
       }
-      const b64url = b64.replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+
+      const b64url = b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
       const url = `https://app.diagrams.net/#R${b64url}`;
       window.open(url, '_blank');
       toast('Opening diagram in diagrams.net (browser).');
