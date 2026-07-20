@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#12211e">
   <title>DevTracker · AI-ready engineering workspace</title>
@@ -26,18 +27,22 @@
       <button class="button quiet" id="exportButton">Export</button>
       <input id="importInput" type="file" accept="application/json" hidden>
       <button class="button quiet" id="aiSettingsButton">AI</button>
+      <button class="button quiet" id="chatToggleButton">💬 Agent</button>
       <button class="button primary" id="newTicketButton">+ Ticket</button>
     </div>
   </header>
 
   <main class="app-shell">
     <aside class="rail">
-      <button class="nav-item active" data-view="map"><span>⌘</span> Workspace</button>
+      <button class="nav-item" data-view="home"><span>⌂</span> Home</button>
+      <button class="nav-item" data-view="map"><span>⌘</span> Workspace</button>
       <button class="nav-item" data-view="context"><span>✎</span> Context</button>
-      <button class="nav-item" data-view="architecture"><span>🏗</span> Architecture</button>
+      <button class="nav-item" data-view="architecture"><span>🏗</span> Diagrams</button>
       <button class="nav-item" data-view="git"><span>⎇</span> Git</button>
+      <button class="nav-item" data-view="milestones"><span>🏁</span> Milestones <em id="milestoneCount"></em></button>
       <button class="nav-item" data-view="decisions"><span>◇</span> Decisions <em id="decisionCount"></em></button>
       <button class="nav-item" data-view="questions"><span>?</span> Questions <em id="questionCount"></em></button>
+      <button class="nav-item" data-view="chat"><span>💬</span> Agent</button>
       <div class="rail-footer"><span class="save-indicator" id="saveIndicator">● Saved locally</span></div>
     </aside>
 
@@ -63,19 +68,31 @@
       <div id="ticketDetails" hidden></div>
     </section>
 
+    <section class="list-view" id="homeView" hidden></section>
     <section class="list-view" id="contextView" hidden></section>
     <section class="list-view" id="architectureView" hidden></section>
     <section class="list-view" id="gitView" hidden></section>
+    <section class="list-view" id="milestonesView" hidden></section>
     <section class="list-view" id="decisionsView" hidden></section>
     <section class="list-view" id="questionsView" hidden></section>
+    <section class="list-view" id="chatView" hidden></section>
   </main>
+
+  <aside class="chat-drawer" id="chatDrawer" hidden style="position:fixed;top:0;right:0;width:420px;max-width:100vw;height:100vh;background:var(--card,#fff);border-left:1px solid var(--line,#d9e0dd);box-shadow:-8px 0 24px rgba(0,0,0,.12);display:none;flex-direction:column;z-index:50">
+    <div class="chat-drawer-head" style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line,#d9e0dd)">
+      <strong>💬 DevTracker Agent</strong>
+      <button class="button quiet" id="chatDrawerClose" type="button">✕</button>
+    </div>
+    <div class="chat-drawer-body" id="chatDrawerBody" style="flex:1;overflow:auto;padding:12px"></div>
+  </aside>
 
   <dialog id="ticketDialog" class="dialog wide"></dialog>
   <dialog id="reportDialog" class="dialog"></dialog>
   <dialog id="aiDialog" class="dialog wide"></dialog>
   <dialog id="decisionDialog" class="dialog"></dialog>
+  <dialog id="decisionExploreDialog" class="dialog wide" style="width:min(980px,calc(100% - 30px))"></dialog>
   <dialog id="questionDialog" class="dialog"></dialog>
   <div class="toast" id="toast" role="status"></div>
-  <script type="module" src="js/app.js?v=cd504525e206c5cc1c59ed30b6e06f14a4f464d6"></script>
+  <script type="module" src="js/app.js?v=7009db377158e67b305e021237564104f124b561"></script>
 </body>
 </html>
