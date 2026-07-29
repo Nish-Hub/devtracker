@@ -70,6 +70,9 @@ test('exposes exactly the documented tools', () => {
     'discuss_decision',
     'flag_milestone',
     'get_briefing',
+    'lab_capture_note',
+    'lab_list_notes',
+    'lab_triage_note',
     'query_context_db',
     'update_acceptance_criteria',
   ]);
@@ -79,6 +82,59 @@ test('every tool has a non-trivial description and an object input schema', () =
   TOOLS.forEach(t => {
     expect(t.description.length).toBeGreaterThan(40);
     expect(t.inputSchema.type).toBe('object');
+  });
+});
+
+describe('lab notes', () => {
+  test('captures raw notes and rejects empty text', () => {
+    const n = handleCall(
+      'lab_capture_note',
+      { project_id: 'CTXR', text: 'Mongo for relations felt wrong', kind: 'anti-pattern' },
+      storePath
+    );
+    expect(n.status).toBe('raw');
+    expect(n.kind).toBe('anti-pattern');
+    expect(() =>
+      handleCall('lab_capture_note', { project_id: 'CTXR', text: '   ' }, storePath)
+    ).toThrow(/required/i);
+  });
+
+  test('triage refuses to promote without a target or discard without a reason', () => {
+    const n = handleCall('lab_capture_note', { project_id: 'CTXR', text: 'a thought' }, storePath);
+    expect(() =>
+      handleCall(
+        'lab_triage_note',
+        { project_id: 'CTXR', note_id: n.id, status: 'promoted' },
+        storePath
+      )
+    ).toThrow(/promoted_to/);
+    expect(() =>
+      handleCall(
+        'lab_triage_note',
+        { project_id: 'CTXR', note_id: n.id, status: 'discarded' },
+        storePath
+      )
+    ).toThrow(/reason/);
+    const done = handleCall(
+      'lab_triage_note',
+      { project_id: 'CTXR', note_id: n.id, status: 'promoted', promoted_to: 'ADR-009' },
+      storePath
+    );
+    expect(done).toMatchObject({ status: 'promoted', promoted_to: 'ADR-009' });
+  });
+
+  test('raw notes are always accompanied by the unvetted disclaimer', () => {
+    handleCall('lab_capture_note', { project_id: 'CTXR', text: 'half-formed idea' }, storePath);
+    const listed = handleCall('lab_list_notes', { project_id: 'CTXR', status: 'raw' }, storePath);
+    expect(listed.disclaimer).toMatch(/UNVETTED/);
+    expect(listed.disclaimer).toMatch(/NOT decisions/);
+    listed.notes.forEach(n => expect(n.status).toBe('raw'));
+
+    const briefing = handleCall('get_briefing', { project_id: 'CTXR' }, storePath);
+    expect(briefing.lab_notes.disclaimer).toMatch(/Do NOT act/);
+    expect(briefing.lab_notes.counts.total).toBeGreaterThan(0);
+    // Only raw notes are surfaced in the briefing body.
+    briefing.lab_notes.raw.forEach(n => expect(n.id).toBeTruthy());
   });
 });
 

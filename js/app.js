@@ -230,6 +230,26 @@ function normalizePage(pg, i) {
     updated: pg.updated || '',
   };
 }
+// Lab notes: RAW captures. Not decisions, constraints or direction until triaged.
+// Mirrors store/workspace-store.js.
+const NOTE_KINDS = ['idea', 'anti-pattern', 'observation', 'gotcha'];
+const NOTE_STATUSES = ['raw', 'triaged', 'promoted', 'discarded'];
+function normalizeNote(n, i) {
+  n = n && typeof n === 'object' ? n : {};
+  return {
+    id: n.id || `LAB-${String(i + 1).padStart(3, '0')}`,
+    kind: NOTE_KINDS.includes(n.kind) ? n.kind : 'idea',
+    text: n && n.text != null ? String(n.text) : '',
+    source: typeof n.source === 'string' ? n.source : '',
+    tags: Array.isArray(n.tags) ? n.tags.map(String) : [],
+    status: NOTE_STATUSES.includes(n.status) ? n.status : 'raw',
+    promotedTo: typeof n.promotedTo === 'string' ? n.promotedTo : '',
+    reason: typeof n.reason === 'string' ? n.reason : '',
+    created: n.created || '',
+    updated: n.updated || '',
+  };
+}
+
 /** Drop unresolvable parent links and break cycles so tree walks can never loop. */
 function repairPageTree(pages) {
   const ids = new Set(pages.map(pg => pg.id));
@@ -279,6 +299,7 @@ function normalizeWorkspace(ws) {
     p.diagrams = (Array.isArray(p.diagrams) ? p.diagrams : []).map(normalizeDiagram);
     p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
     p.pages = repairPageTree((Array.isArray(p.pages) ? p.pages : []).map(normalizePage));
+    p.notes = (Array.isArray(p.notes) ? p.notes : []).map(normalizeNote);
     if (p.architecture?.content && !p.architecture.migratedToDiagrams) {
       const fmt =
         p.architecture.type === 'svg'
@@ -524,6 +545,7 @@ function renderAll() {
   renderTicket();
   renderContext();
   renderAtlas();
+  renderLab();
   renderArchitecture();
   renderGit();
   renderMilestones();
@@ -2109,6 +2131,311 @@ function openDecisionForm(existing) {
   };
   d.showModal();
 }
+// ---- Lab: raw notes -------------------------------------------------------
+let labFilterStatus = 'raw';
+let labFilterKind = '';
+
+const NOTE_KIND_LABEL = {
+  idea: '💡 idea',
+  'anti-pattern': '⚠ anti-pattern',
+  observation: '👁 observation',
+  gotcha: '🪤 gotcha',
+};
+
+function nextNoteId(project) {
+  let max = 0;
+  (project.notes || []).forEach(n => {
+    const m = String(n.id).match(/^LAB-(\d+)$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  return `LAB-${String(max + 1).padStart(3, '0')}`;
+}
+
+function renderLab() {
+  const project = activeProject();
+  const el = $('#labView');
+  if (!el) return;
+  const notes = project.notes || [];
+  const counts = NOTE_STATUSES.reduce(
+    (a, s) => ({ ...a, [s]: notes.filter(n => n.status === s).length }),
+    {}
+  );
+  let shown = notes.slice().reverse();
+  if (labFilterStatus) shown = shown.filter(n => n.status === labFilterStatus);
+  if (labFilterKind) shown = shown.filter(n => n.kind === labFilterKind);
+
+  const chip = (val, cur, label, key) =>
+    `<button class="lab-chip${val === cur ? ' active' : ''}" data-lab-${key}="${esc(val)}">${esc(
+      label
+    )}</button>`;
+
+  el.innerHTML = `<div class="view-head"><div><p class="eyebrow">LAB</p><h1>Raw notes</h1><p class="subcopy">Unprocessed thoughts — ideas, anti-patterns, observations, gotchas. Nothing here is a decision or a requirement until you triage it.</p></div><button class="button primary" id="labNew">+ Note</button></div>
+
+  <div class="lab-banner"><strong>Raw notes carry no authority.</strong> The agent is shown these as explicitly unvetted and told not to act on them, override a decision, or cite them as settled. Triage promotes a note into a decision, story, question or Atlas page — or discards it with a reason.</div>
+
+  <div class="lab-filters">
+    <span class="list-meta">Status</span>
+    ${chip('', labFilterStatus, `all (${notes.length})`, 'status')}
+    ${NOTE_STATUSES.map(s => chip(s, labFilterStatus, `${s} (${counts[s] || 0})`, 'status')).join(
+      ''
+    )}
+    <span class="list-meta" style="margin-left:10px">Kind</span>
+    ${chip('', labFilterKind, 'any', 'kind')}
+    ${NOTE_KINDS.map(k => chip(k, labFilterKind, k, 'kind')).join('')}
+  </div>
+
+  <div class="lab-list">${
+    shown.length
+      ? shown
+          .map(
+            n => `<article class="lab-note ${esc(n.status)}">
+        <p class="lab-note-head"><span class="lab-kind">${esc(
+          NOTE_KIND_LABEL[n.kind] || n.kind
+        )}</span>
+          <span class="lab-status ${esc(n.status)}">${esc(n.status)}</span>
+          <span class="list-meta">${esc(n.id)}${n.source ? ` · from ${esc(n.source)}` : ''}${
+              n.created ? ` · ${esc(String(n.created).slice(0, 10))}` : ''
+            }</span></p>
+        <p class="lab-text">${esc(n.text)}</p>
+        ${
+          n.promotedTo
+            ? `<p class="list-meta">→ became <strong>${esc(n.promotedTo)}</strong></p>`
+            : ''
+        }
+        ${n.reason ? `<p class="list-meta">Reason: ${esc(n.reason)}</p>` : ''}
+        <p class="lab-actions">
+          <button class="button" data-lab-edit="${esc(n.id)}">Edit</button>
+          ${
+            n.status === 'raw' || n.status === 'triaged'
+              ? `<button class="button" data-lab-promote="${esc(n.id)}">→ Promote</button>
+                 <button class="button" data-lab-keep="${esc(n.id)}">Mark triaged</button>
+                 <button class="button" data-lab-discard="${esc(n.id)}">Discard</button>`
+              : `<button class="button" data-lab-reopen="${esc(n.id)}">Reopen as raw</button>`
+          }
+        </p></article>`
+          )
+          .join('')
+      : '<p class="subcopy">Nothing here with those filters. Capture a thought with “+ Note”.</p>'
+  }</div>`;
+
+  $('#labNew').onclick = () => openLabNoteForm();
+  el.querySelectorAll('[data-lab-status]').forEach(
+    b =>
+      (b.onclick = () => {
+        labFilterStatus = b.dataset.labStatus;
+        renderLab();
+      })
+  );
+  el.querySelectorAll('[data-lab-kind]').forEach(
+    b =>
+      (b.onclick = () => {
+        labFilterKind = b.dataset.labKind;
+        renderLab();
+      })
+  );
+  const find = id => (project.notes || []).find(n => n.id === id);
+  el.querySelectorAll('[data-lab-edit]').forEach(
+    b => (b.onclick = () => openLabNoteForm(find(b.dataset.labEdit)))
+  );
+  el.querySelectorAll('[data-lab-promote]').forEach(
+    b => (b.onclick = () => openLabPromoteForm(find(b.dataset.labPromote)))
+  );
+  el.querySelectorAll('[data-lab-keep]').forEach(
+    b =>
+      (b.onclick = () => {
+        const n = find(b.dataset.labKeep);
+        n.status = 'triaged';
+        n.updated = new Date().toISOString();
+        logActivity(project, 'note', `${n.id} triaged`, n.id);
+        save();
+        renderAll();
+      })
+  );
+  el.querySelectorAll('[data-lab-reopen]').forEach(
+    b =>
+      (b.onclick = () => {
+        const n = find(b.dataset.labReopen);
+        n.status = 'raw';
+        n.promotedTo = '';
+        n.reason = '';
+        n.updated = new Date().toISOString();
+        save();
+        renderAll();
+      })
+  );
+  el.querySelectorAll('[data-lab-discard]').forEach(
+    b =>
+      (b.onclick = () => {
+        const n = find(b.dataset.labDiscard);
+        const reason = prompt(`Why is “${n.text.slice(0, 60)}” being discarded?`);
+        if (!reason || !reason.trim()) return; // a discard without a reason is just deletion
+        n.status = 'discarded';
+        n.reason = reason.trim();
+        n.updated = new Date().toISOString();
+        logActivity(project, 'note', `${n.id} discarded`, n.id);
+        save();
+        renderAll();
+        toast('Note discarded with reason.');
+      })
+  );
+}
+
+function openLabNoteForm(existing) {
+  const project = activeProject();
+  const d = $('#labDialog');
+  d.innerHTML = `<form class="dialog-body"><h2>${
+    existing ? 'Edit note' : 'Capture a raw thought'
+  }</h2>
+    <p class="subcopy">No need to polish it. Raw is the point — triage comes later.</p>
+    <div class="field"><label>Thought</label><textarea name="text" rows="5" required>${esc(
+      existing ? existing.text : ''
+    )}</textarea></div>
+    <div class="field"><label>Kind</label><select name="kind">${NOTE_KINDS.map(
+      k => `<option value="${k}"${existing && existing.kind === k ? ' selected' : ''}>${k}</option>`
+    ).join('')}</select></div>
+    <div class="field"><label>Source</label><input name="source" placeholder="office MVP, code review, a call…" value="${esc(
+      existing ? existing.source : ''
+    )}"></div>
+    <div class="field"><label>Tags (comma separated)</label><input name="tags" value="${esc(
+      existing ? existing.tags.join(', ') : ''
+    )}"></div>
+    <div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary">${
+      existing ? 'Save' : 'Capture'
+    }</button></div></form>`;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('form').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const text = String(f.get('text') || '').trim();
+    if (!text) return;
+    const tags = String(f.get('tags') || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (existing) {
+      existing.text = text;
+      existing.kind = String(f.get('kind'));
+      existing.source = String(f.get('source') || '');
+      existing.tags = tags;
+      existing.updated = new Date().toISOString();
+    } else {
+      project.notes = Array.isArray(project.notes) ? project.notes : [];
+      const now = new Date().toISOString();
+      const note = normalizeNote(
+        {
+          id: nextNoteId(project),
+          kind: String(f.get('kind')),
+          text,
+          source: String(f.get('source') || ''),
+          tags,
+          status: 'raw',
+          created: now,
+          updated: now,
+        },
+        project.notes.length
+      );
+      project.notes.push(note);
+      logActivity(
+        project,
+        'note',
+        `${note.id} captured (${note.kind}): ${text.slice(0, 60)}`,
+        note.id
+      );
+    }
+    d.close();
+    save();
+    renderAll();
+    toast(existing ? 'Note updated.' : 'Captured.');
+  };
+  d.showModal();
+}
+
+/**
+ * Promotion turns a raw thought into something with authority. The note records
+ * where it went, so the trail from thought to artifact survives.
+ */
+function openLabPromoteForm(note) {
+  const project = activeProject();
+  if (!note) return;
+  const d = $('#labDialog');
+  d.innerHTML = `<form class="dialog-body"><h2>Promote ${esc(note.id)}</h2>
+    <p class="subcopy">“${esc(note.text.slice(0, 160))}”</p>
+    <div class="field"><label>Promote into</label><select name="target">
+      <option value="question">An open question</option>
+      <option value="page">An Atlas page</option>
+      <option value="decision">A decision proposal</option>
+      <option value="existing">Something that already exists (enter its id)</option>
+    </select></div>
+    <div class="field"><label>Title / id</label><input name="detail" placeholder="Title for the new item, or an existing id like ADR-008"></div>
+    <div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary">Promote</button></div></form>`;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('form').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const target = String(f.get('target'));
+    const detail = String(f.get('detail') || '').trim();
+    const title = detail || note.text.slice(0, 80);
+    let becameId = '';
+    if (target === 'question') {
+      const q = {
+        id: `Q-${String((project.questions || []).length + 1).padStart(3, '0')}`,
+        lane: 'human',
+        text: title,
+        resolved: false,
+      };
+      project.questions = Array.isArray(project.questions) ? project.questions : [];
+      project.questions.push(q);
+      becameId = q.id;
+    } else if (target === 'page') {
+      project.pages = Array.isArray(project.pages) ? project.pages : [];
+      const now = new Date().toISOString();
+      const pg = normalizePage(
+        {
+          id: nextPageId(project),
+          title,
+          body: `> Promoted from Lab note ${note.id}${
+            note.source ? ` (source: ${note.source})` : ''
+          }.\n\n${note.text}`,
+          tags: note.tags,
+          created: now,
+          updated: now,
+        },
+        project.pages.length
+      );
+      project.pages.push(pg);
+      becameId = pg.id;
+      atlasSelectedPageId = pg.id;
+    } else if (target === 'decision') {
+      project.decisions = Array.isArray(project.decisions) ? project.decisions : [];
+      const dec = normalizeDecision({
+        id: `ADR-${String(project.decisions.length + 1).padStart(3, '0')}`,
+        date: new Date().toISOString().slice(0, 10),
+        title,
+        context: note.text,
+        status: 'proposed',
+        source: 'lab',
+      });
+      project.decisions.push(dec);
+      becameId = dec.id;
+    } else {
+      if (!detail) {
+        toast('Enter the id it became.');
+        return;
+      }
+      becameId = detail;
+    }
+    note.status = 'promoted';
+    note.promotedTo = becameId;
+    note.updated = new Date().toISOString();
+    logActivity(project, 'note', `${note.id} promoted → ${becameId}`, note.id);
+    d.close();
+    save();
+    renderAll();
+    toast(`Promoted to ${becameId}.`);
+  };
+  d.showModal();
+}
+
 // ---- Atlas: knowledge pages -----------------------------------------------
 let atlasSelectedPageId = '';
 let atlasEditing = false;
@@ -5336,6 +5663,7 @@ function setView(view) {
     'map',
     'context',
     'atlas',
+    'lab',
     'architecture',
     'playground',
     'coder',

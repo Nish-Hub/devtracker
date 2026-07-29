@@ -158,3 +158,24 @@
 .atlas-link-row{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:3px 4px;border-radius:5px}
 .atlas-link-row:hover{background:var(--hover,rgba(127,127,127,.1))}
 @media (max-width:900px){.atlas-layout{grid-template-columns:1fr}.atlas-tree{position:static;max-height:none}}
+
+/* ---- Lab: raw notes ---- */
+.lab-banner{border:1px solid var(--line);border-left:3px solid var(--amber,#c99e5b);border-radius:8px;background:var(--panel);padding:11px 14px;margin-top:16px;font-size:12.5px;line-height:1.55;color:var(--muted)}
+.lab-filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:16px 0 6px}
+.lab-chip{border:1px solid var(--line);border-radius:999px;background:none;color:var(--text);padding:3px 11px;font:11px 'DM Mono',monospace;cursor:pointer}
+.lab-chip:hover{background:var(--hover,rgba(127,127,127,.12))}
+.lab-chip.active{background:var(--accent-soft,rgba(90,120,255,.18));font-weight:700}
+.lab-list{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.lab-note{border:1px solid var(--line);border-left-width:3px;border-radius:9px;background:var(--panel);padding:12px 14px;box-shadow:var(--shadow)}
+.lab-note.raw{border-left-color:var(--amber,#c99e5b)}
+.lab-note.triaged{border-left-color:var(--accent,#5a78ff)}
+.lab-note.promoted{border-left-color:var(--trail,#2f6e63)}
+.lab-note.discarded{border-left-color:var(--line);opacity:.6}
+.lab-note-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:7px}
+.lab-kind{font:11px 'DM Mono',monospace;letter-spacing:.02em}
+.lab-status{border-radius:999px;padding:1px 9px;font:10px 'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;border:1px solid var(--line)}
+.lab-status.raw{background:var(--amber-soft,#f1e6d2);color:#7a5a1e}
+.lab-status.triaged{background:var(--accent-soft,rgba(90,120,255,.18))}
+.lab-status.promoted{background:var(--trail-soft,#8fb3ac);color:#123}
+.lab-text{font-size:14px;line-height:1.6;white-space:pre-wrap;margin:0 0 8px}
+.lab-actions{display:flex;gap:6px;flex-wrap:wrap;margin:9px 0 0}

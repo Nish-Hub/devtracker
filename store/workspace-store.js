@@ -136,6 +136,29 @@ function normalizePage(pg, i) {
   };
 }
 
+// A Lab "note" is a RAW capture — an idea, an anti-pattern, an observation, a gotcha.
+// Notes are explicitly unvetted: they are not decisions, constraints or direction until
+// a human triages them. Status moves raw -> triaged -> promoted | discarded.
+const NOTE_KINDS = ['idea', 'anti-pattern', 'observation', 'gotcha'];
+const NOTE_STATUSES = ['raw', 'triaged', 'promoted', 'discarded'];
+function normalizeNote(n, i) {
+  n = n && typeof n === 'object' ? n : {};
+  return {
+    id: n.id || `LAB-${String(i + 1).padStart(3, '0')}`,
+    kind: NOTE_KINDS.includes(n.kind) ? n.kind : 'idea',
+    text: n && n.text != null ? String(n.text) : '',
+    source: typeof n.source === 'string' ? n.source : '',
+    tags: Array.isArray(n.tags) ? n.tags.map(String) : [],
+    status: NOTE_STATUSES.includes(n.status) ? n.status : 'raw',
+    // Where a promoted note ended up: an ADR / ticket / question / page id.
+    promotedTo: typeof n.promotedTo === 'string' ? n.promotedTo : '',
+    // Triage rationale — especially why something was discarded.
+    reason: typeof n.reason === 'string' ? n.reason : '',
+    created: n.created || '',
+    updated: n.updated || '',
+  };
+}
+
 /** Drop unresolvable parent links and break cycles, so tree walks can never loop. */
 function repairPageTree(pages) {
   const ids = new Set(pages.map(pg => pg.id));
@@ -200,6 +223,7 @@ function normalizeWorkspace(ws) {
     p.diagrams = (Array.isArray(p.diagrams) ? p.diagrams : []).map(normalizeDiagram);
     p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
     p.pages = repairPageTree((Array.isArray(p.pages) ? p.pages : []).map(normalizePage));
+    p.notes = (Array.isArray(p.notes) ? p.notes : []).map(normalizeNote);
     // One-time migration: fold the legacy single architecture upload into the gallery.
     if (p.architecture.content && !p.architecture.migratedToDiagrams) {
       const legacyFormat =
@@ -595,6 +619,105 @@ function pageOutline(project) {
   return out;
 }
 
+// ---- Lab: raw notes --------------------------------------------------------
+
+/**
+ * The wording an agent sees alongside raw notes. Deliberately blunt: unvetted
+ * captures must never be mistaken for direction.
+ */
+const LAB_DISCLAIMER =
+  "UNVETTED RAW NOTES. These are the Tech Lead's unprocessed thoughts — ideas, " +
+  'suspected anti-patterns, observations. They are NOT decisions, constraints, ' +
+  'requirements or direction, and several may be wrong or contradictory. Do NOT act ' +
+  'on them, cite them as settled, or let them override a decision or constraint. Use ' +
+  'them only for awareness; if one looks relevant, raise it for triage.';
+
+function addNote(ws, projectId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  project.notes = Array.isArray(project.notes) ? project.notes : [];
+  const text = String((input && input.text) || '').trim();
+  if (!text) throw new Error('Note text is required');
+  const now = new Date().toISOString();
+  const note = normalizeNote(
+    {
+      id: nextId('LAB', project.notes),
+      kind: input.kind,
+      text,
+      source: input.source,
+      tags: input.tags,
+      status: 'raw',
+      created: now,
+      updated: now,
+    },
+    project.notes.length
+  );
+  project.notes.push(note);
+  logActivity(project, 'note', `${note.id} captured (${note.kind}): ${text.slice(0, 70)}`, note.id);
+  return note;
+}
+
+/** Partial edit of a raw note's content. Status changes go through triageNote. */
+function updateNote(ws, projectId, noteId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  const note = (project.notes || []).find(n => n.id === noteId);
+  if (!note) throw new Error(`Unknown note: ${noteId}`);
+  if (input.text != null) note.text = String(input.text);
+  if (input.kind != null) {
+    if (!NOTE_KINDS.includes(input.kind)) throw new Error(`Unknown note kind: ${input.kind}`);
+    note.kind = input.kind;
+  }
+  if (input.source != null) note.source = String(input.source);
+  if (input.tags != null) note.tags = (Array.isArray(input.tags) ? input.tags : []).map(String);
+  note.updated = new Date().toISOString();
+  return note;
+}
+
+/**
+ * Move a note out of the raw pile. Promoting records where it went (an ADR /
+ * ticket / question / page id) so the trail from thought to artifact survives;
+ * discarding records why, so it is not re-raised later.
+ */
+function triageNote(ws, projectId, noteId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  const note = (project.notes || []).find(n => n.id === noteId);
+  if (!note) throw new Error(`Unknown note: ${noteId}`);
+  const status = input && input.status;
+  if (!NOTE_STATUSES.includes(status)) throw new Error(`Unknown note status: ${status}`);
+  if (
+    status === 'promoted' &&
+    !String((input && input.promoted_to) || input.promotedTo || '').trim()
+  ) {
+    throw new Error('Promoting a note requires promoted_to (the id it became)');
+  }
+  if (status === 'discarded' && !String((input && input.reason) || '').trim()) {
+    throw new Error('Discarding a note requires a reason');
+  }
+  note.status = status;
+  if (input.promoted_to != null || input.promotedTo != null) {
+    note.promotedTo = String(input.promoted_to != null ? input.promoted_to : input.promotedTo);
+  }
+  if (input.reason != null) note.reason = String(input.reason);
+  note.updated = new Date().toISOString();
+  logActivity(
+    project,
+    'note',
+    `${note.id} ${status}${note.promotedTo ? ` → ${note.promotedTo}` : ''}`,
+    note.id
+  );
+  return note;
+}
+
+function noteCounts(project) {
+  const notes = Array.isArray(project.notes) ? project.notes : [];
+  return NOTE_STATUSES.reduce(
+    (acc, s) => ({ ...acc, [s]: notes.filter(n => n.status === s).length }),
+    { total: notes.length }
+  );
+}
+
 /** One-call grounding for agents: everything a session needs to stay aligned. */
 function buildBriefing(ws, projectId) {
   const project = getProject(ws, projectId);
@@ -656,6 +779,13 @@ function buildBriefing(ws, projectId) {
       path: pg.path,
       story_ids: pg.storyIds,
     })),
+    lab_notes: {
+      disclaimer: LAB_DISCLAIMER,
+      counts: noteCounts(project),
+      raw: (project.notes || [])
+        .filter(n => n.status === 'raw')
+        .map(n => ({ id: n.id, kind: n.kind, text: n.text, source: n.source })),
+    },
     recent_activity: (project.activity || []).slice(-10),
   };
 }
@@ -688,4 +818,13 @@ module.exports = {
   linkPageStories,
   pagesForStory,
   pageOutline,
+  // Lab
+  NOTE_KINDS,
+  NOTE_STATUSES,
+  LAB_DISCLAIMER,
+  normalizeNote,
+  addNote,
+  updateNote,
+  triageNote,
+  noteCounts,
 };

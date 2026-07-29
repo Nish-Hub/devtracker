@@ -21,6 +21,24 @@ the full spec.
 | `atlas_comment_page` | Add an argument/analysis to a page's discussion thread. |
 | `atlas_add_diagram` | Attach a page-owned diagram (draw.io XML, SVG, Excalidraw, image, text). |
 | `atlas_link_story` | Link/unlink stories on a page (`add` / `set` / `remove`). |
+| `lab_capture_note` | Capture a **raw, unvetted** thought (idea / anti-pattern / observation / gotcha). |
+| `lab_list_notes` | List Lab notes, filterable by status/kind; always returns the unvetted disclaimer. |
+| `lab_triage_note` | Move a note out of raw: promote (requires a target id) or discard (requires a reason). |
+
+### Lab
+
+The Lab is a capture inbox for **raw thoughts** — ideas, suspected anti-patterns, observations,
+gotchas, typically learned from another system. It exists so unprocessed material has a home that is
+clearly separated from settled knowledge.
+
+**Notes carry no authority.** Status runs `raw → triaged → promoted | discarded`. Raw notes appear in
+`get_briefing` under `lab_notes`, always accompanied by a disclaimer telling the agent they are not
+decisions, constraints or direction, may be wrong or contradictory, and must not override anything.
+Promotion records the id the note became, so the trail from thought to artifact survives; discarding
+requires a reason, so it is not re-raised later.
+
+The distinction that matters: a **decision** is a choice with authority, a **note** is a thought
+without it. Never use `lab_capture_note` to record a settled choice — use `capture_decision`.
 
 ### Atlas
 
