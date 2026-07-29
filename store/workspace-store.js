@@ -78,6 +78,85 @@ function normalizeDiagram(g, i) {
   };
 }
 
+// A "journey" is a manually-runnable simulation of one project flow (Postman-style):
+// an ordered list of steps, each either a mock API request/response or a mock UI
+// screen (HTML), that the tech lead steps through with a live preview.
+function normalizeStep(s, i) {
+  s = s && typeof s === 'object' ? s : {};
+  return {
+    id: s.id || `STP-${String(i + 1).padStart(3, '0')}`,
+    name: s.name || `Step ${i + 1}`,
+    kind: s.kind === 'screen' ? 'screen' : 'request',
+    method: s.method || 'GET',
+    path: s.path || '',
+    request: typeof s.request === 'string' ? s.request : '',
+    response: typeof s.response === 'string' ? s.response : '',
+    status: Number.isFinite(s.status) ? s.status : 200,
+    latencyMs: Number.isFinite(s.latencyMs) ? s.latencyMs : 0,
+    note: typeof s.note === 'string' ? s.note : '',
+  };
+}
+function normalizeJourney(j, i) {
+  j = j && typeof j === 'object' ? j : {};
+  const steps = (Array.isArray(j.steps) ? j.steps : []).map(normalizeStep);
+  return {
+    id: j.id || `JNY-${String(i + 1).padStart(3, '0')}`,
+    name: j.name || `Journey ${i + 1}`,
+    description: typeof j.description === 'string' ? j.description : '',
+    baseUrl: typeof j.baseUrl === 'string' ? j.baseUrl : '',
+    activeStepId: j.activeStepId || (steps[0] ? steps[0].id : ''),
+    steps,
+  };
+}
+
+// An Atlas "page" is a durable knowledge document: a discussion that settled into
+// prose, with its own diagrams and a comment thread. Pages form a tree via parentId
+// (''  = root) and may be linked to many stories (tickets).
+function normalizePageComment(c) {
+  c = c && typeof c === 'object' ? c : {};
+  return {
+    role: ['lead', 'ai', 'agent'].includes(c.role) ? c.role : 'agent',
+    text: c && c.text != null ? String(c.text) : '',
+    ts: c.ts || '',
+  };
+}
+function normalizePage(pg, i) {
+  pg = pg && typeof pg === 'object' ? pg : {};
+  return {
+    id: pg.id || `PG-${String(i + 1).padStart(3, '0')}`,
+    title: pg.title || `Untitled page ${i + 1}`,
+    parentId: typeof pg.parentId === 'string' ? pg.parentId : '',
+    body: typeof pg.body === 'string' ? pg.body : '',
+    tags: Array.isArray(pg.tags) ? pg.tags.map(String) : [],
+    storyIds: Array.isArray(pg.storyIds) ? pg.storyIds.map(String) : [],
+    diagrams: (Array.isArray(pg.diagrams) ? pg.diagrams : []).map(normalizeDiagram),
+    comments: (Array.isArray(pg.comments) ? pg.comments : []).map(normalizePageComment),
+    created: pg.created || '',
+    updated: pg.updated || '',
+  };
+}
+
+/** Drop unresolvable parent links and break cycles, so tree walks can never loop. */
+function repairPageTree(pages) {
+  const ids = new Set(pages.map(pg => pg.id));
+  pages.forEach(pg => {
+    if (pg.parentId && !ids.has(pg.parentId)) pg.parentId = '';
+  });
+  pages.forEach(pg => {
+    const seen = new Set([pg.id]);
+    let cur = pg.parentId;
+    while (cur) {
+      if (seen.has(cur)) {
+        pg.parentId = '';
+        break;
+      }
+      seen.add(cur);
+      cur = (pages.find(x => x.id === cur) || {}).parentId || '';
+    }
+  });
+  return pages;
+}
+
 function normalizeWorkspace(ws) {
   ws = ws && typeof ws === 'object' ? ws : emptyWorkspace();
   if (!Array.isArray(ws.projects)) ws.projects = [];
@@ -119,6 +198,7 @@ function normalizeWorkspace(ws) {
       p.architecture = { name: '', type: '', content: '', description: '' };
     }
     p.diagrams = (Array.isArray(p.diagrams) ? p.diagrams : []).map(normalizeDiagram);
+    p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
     // One-time migration: fold the legacy single architecture upload into the gallery.
     if (p.architecture.content && !p.architecture.migratedToDiagrams) {
       const legacyFormat =

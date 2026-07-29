@@ -202,6 +202,34 @@ test('normalizeWorkspace migrates a legacy architecture upload into diagrams onc
   expect(again.projects[0].diagrams).toHaveLength(1); // no duplicate on re-normalize
 });
 
+test('normalizeWorkspace backfills journeys with step ids, kinds, and an active step', () => {
+  const ws = S.normalizeWorkspace({
+    projects: [
+      {
+        id: 'X',
+        journeys: [
+          {
+            name: 'Ingest flow',
+            steps: [
+              { name: 'POST /ingest', kind: 'request' },
+              { name: 'Results UI', kind: 'screen' },
+            ],
+          },
+          { steps: [] },
+        ],
+      },
+    ],
+  });
+  const js = ws.projects[0].journeys;
+  expect(js).toHaveLength(2);
+  expect(js[0].steps[0].id).toBe('STP-001');
+  expect(js[0].steps[1].kind).toBe('screen');
+  expect(js[0].activeStepId).toBe('STP-001'); // defaults to first step
+  expect(js[0].steps[0].method).toBe('GET');
+  expect(js[0].steps[0].status).toBe(200);
+  expect(js[1].id).toBe('JNY-002');
+});
+
 test('unknown project or ticket throws', () => {
   expect(() => S.withStore(storePath, ws => S.addMilestone(ws, 'NOPE', { title: 'x' }))).toThrow();
   expect(() =>

@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+
+# Local live store (agent-accessible). Project state, not source.
+workspace.json

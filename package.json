@@ -6,7 +6,9 @@
   "license": "MIT",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
+    "start": "electron . --remote-debugging-port=9222",
+    "start:local": "DEVTRACKER_STORE=\"$PWD/workspace.json\" electron . --remote-debugging-port=9222",
+    "mcp:local": "DEVTRACKER_STORE=\"$PWD/workspace.json\" node mcp/server.js",
     "pack": "electron-builder --mac --dir",
     "dist": "electron-builder --mac",
     "lint": "eslint . --ext .js",

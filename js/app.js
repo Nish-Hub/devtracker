@@ -22,6 +22,57 @@ const DEFAULT_AI_SETTINGS = {
       costPer1k: 0,
     },
     {
+      id: 'ollama-qwen',
+      name: 'Ollama · qwen2.5-coder:3b',
+      type: 'openai-compatible',
+      endpoint: 'http://127.0.0.1:11434/v1/chat/completions',
+      model: 'qwen2.5-coder:3b',
+      apiKey: 'ollama',
+      tier: 'cheap',
+      location: 'local',
+      sensitivityOK: true,
+      costPer1k: 0,
+    },
+    {
+      id: 'ollama-qwen7b',
+      name: 'Ollama · qwen2.5-coder:7b',
+      type: 'openai-compatible',
+      endpoint: 'http://127.0.0.1:11434/v1/chat/completions',
+      model: 'qwen2.5-coder:7b',
+      apiKey: 'ollama',
+      tier: 'mid',
+      location: 'local',
+      sensitivityOK: true,
+      costPer1k: 0,
+    },
+    {
+      id: 'ollama-llama',
+      name: 'Ollama · llama3.2',
+      type: 'openai-compatible',
+      endpoint: 'http://127.0.0.1:11434/v1/chat/completions',
+      model: 'llama3.2',
+      apiKey: 'ollama',
+      tier: 'cheap',
+      location: 'local',
+      sensitivityOK: true,
+      costPer1k: 0,
+    },
+    {
+      // Ollama Cloud — big coder models hosted by Ollama. Paste your key from
+      // ollama.com/settings/keys in AI settings; confirm the current cloud model
+      // name at ollama.com/search?c=cloud. Hosted → sensitivityOK OFF (data leaves the machine).
+      id: 'ollama-cloud',
+      name: 'Ollama Cloud · qwen3-coder',
+      type: 'openai-compatible',
+      endpoint: 'https://ollama.com/v1/chat/completions',
+      model: 'qwen3-coder:480b',
+      apiKey: '',
+      tier: 'strong',
+      location: 'hosted',
+      sensitivityOK: false,
+      costPer1k: 0.4,
+    },
+    {
       id: 'grok',
       name: 'Grok / xAI',
       type: 'openai-compatible',
@@ -52,6 +103,7 @@ const DIAGRAM_KINDS = {
 };
 let workspace = load();
 let aiSettings = loadAiSettings();
+const providerHealth = {}; // provider.id -> { ok, ts } — declared early (used during init render)
 const $ = s => document.querySelector(s);
 const esc = s =>
   String(s || '').replace(
@@ -126,6 +178,33 @@ function normalizeDiagram(g, i) {
     updated: g.updated || '',
   };
 }
+function normalizeStep(s, i) {
+  s = s && typeof s === 'object' ? s : {};
+  return {
+    id: s.id || `STP-${String(i + 1).padStart(3, '0')}`,
+    name: s.name || `Step ${i + 1}`,
+    kind: s.kind === 'screen' ? 'screen' : 'request',
+    method: s.method || 'GET',
+    path: s.path || '',
+    request: typeof s.request === 'string' ? s.request : '',
+    response: typeof s.response === 'string' ? s.response : '',
+    status: Number.isFinite(s.status) ? s.status : 200,
+    latencyMs: Number.isFinite(s.latencyMs) ? s.latencyMs : 0,
+    note: typeof s.note === 'string' ? s.note : '',
+  };
+}
+function normalizeJourney(j, i) {
+  j = j && typeof j === 'object' ? j : {};
+  const steps = (Array.isArray(j.steps) ? j.steps : []).map(normalizeStep);
+  return {
+    id: j.id || `JNY-${String(i + 1).padStart(3, '0')}`,
+    name: j.name || `Journey ${i + 1}`,
+    description: typeof j.description === 'string' ? j.description : '',
+    baseUrl: typeof j.baseUrl === 'string' ? j.baseUrl : '',
+    activeStepId: j.activeStepId || (steps[0] ? steps[0].id : ''),
+    steps,
+  };
+}
 function normalizeWorkspace(ws) {
   ws.prompts = (Array.isArray(ws.prompts) ? ws.prompts : [])
     .filter(pr => pr && (pr.text || pr.name))
@@ -152,6 +231,7 @@ function normalizeWorkspace(ws) {
         active: c.active !== false,
       }));
     p.diagrams = (Array.isArray(p.diagrams) ? p.diagrams : []).map(normalizeDiagram);
+    p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
     if (p.architecture?.content && !p.architecture.migratedToDiagrams) {
       const fmt =
         p.architecture.type === 'svg'
@@ -255,9 +335,15 @@ function migrateWorkspace(saved) {
 function loadAiSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(AI_SETTINGS_KEY));
-    return saved?.providers
-      ? { ...clone(DEFAULT_AI_SETTINGS), ...saved, providers: mergeProviders(saved.providers) }
-      : clone(DEFAULT_AI_SETTINGS);
+    if (!saved?.providers) return clone(DEFAULT_AI_SETTINGS);
+    // Migration: "localhost" endpoints break in Electron's Node 18 fetch (IPv6
+    // ::1 first; Ollama binds IPv4-only). Pin saved local endpoints to 127.0.0.1.
+    saved.providers.forEach(p => {
+      if (typeof p.endpoint === 'string' && p.endpoint.includes('//localhost:')) {
+        p.endpoint = p.endpoint.replace('//localhost:', '//127.0.0.1:');
+      }
+    });
+    return { ...clone(DEFAULT_AI_SETTINGS), ...saved, providers: mergeProviders(saved.providers) };
   } catch {
     return clone(DEFAULT_AI_SETTINGS);
   }
@@ -347,6 +433,8 @@ function switchProject(id) {
   workspace.activeProjectId = id;
   if (!project.selectedTicketId && project.tickets.length)
     project.selectedTicketId = project.tickets[0].id;
+  playgroundPlaying = false;
+  playgroundJourneyId = null;
   save();
   renderAll();
 }
@@ -393,6 +481,8 @@ function renderAll() {
   renderMilestones();
   renderDecisions();
   renderQuestions();
+  renderPlayground();
+  renderCoder();
   renderChatSurfaces();
 }
 function renderCounts() {
@@ -932,6 +1022,7 @@ async function requestAiDraft(form, provider) {
   };
   if (provider.model) payload.model = provider.model;
   const data = await aiHttp(provider, payload);
+
   const text = data.choices?.[0]?.message?.content || data.output_text || '';
   return parseAiDraft(text);
 }
@@ -1084,7 +1175,13 @@ function openAiSettings() {
           p.name
         )}</option>`
     )
-    .join('')}</select></div>
+    .join('')}</select>${
+    provider.endpoint && provider.apiKey
+      ? `<p class="settings-note" style="margin:6px 0 0" data-health-for="${esc(
+          provider.id
+        )}">${healthDotHtml(null)} ${esc(provider.name)} — checking…</p>`
+      : ''
+  }</div>
   <div class="form-grid"><div class="field"><label>Name</label><input name="name" value="${esc(
     provider.name
   )}" ${
@@ -1171,6 +1268,7 @@ function openAiSettings() {
     toast('AI settings saved.');
   };
   if (!d.open) d.showModal();
+  if (provider.endpoint && provider.apiKey) updateHealthBadges(provider);
 }
 function persistProviderEdits(form) {
   const p = activeProvider();
@@ -2102,7 +2200,7 @@ function renderHome() {
     (a, b) => estTokens(a.text) - estTokens(b.text)
   );
   el.innerHTML = `<div class="view-head"><div><p class="eyebrow">MISSION CONTROL</p><h1>Welcome back, Tech Lead.</h1><p class="subcopy">${catchup}</p></div><div style="display:flex;gap:8px"><button class="button" id="exportStatusPage">Export status page</button><button class="button primary" id="homeAddProject">+ Project</button></div></div>
-  <div class="field" style="margin:16px 0 6px"><input id="homeSearch" placeholder="Search every project — tickets, decisions, milestones, questions…" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:11px 13px;font:13px Manrope;background:#fff"></div>
+  <div class="field" style="margin:16px 0 6px"><input id="homeSearch" placeholder="Search every project — tickets, decisions, milestones, questions…" style="width:100%;border:1px solid var(--line);border-radius:8px;padding:11px 13px;font:13px Manrope;background:var(--panel)"></div>
   <div id="homeSearchResults"></div>
   <div class="home-grid">${
     workspace.projects.map(homeProjectCard).join('') ||
@@ -2438,7 +2536,7 @@ function exportStatusPage() {
   const now = new Date().toISOString().slice(0, 16).replace('T', ' ');
   const proj = p => {
     const s = projectStats(p);
-    return `<section style="border:1px solid #dce2dc;border-radius:10px;padding:20px;margin:14px 0;background:#fff"><h2 style="margin:0 0 4px">${esc(
+    return `<section style="border:1px solid #dce2dc;border-radius:10px;padding:20px;margin:14px 0;background:var(--panel)"><h2 style="margin:0 0 4px">${esc(
       p.name
     )} <small style="color:#82908a;font-weight:400">${esc(p.code || p.id)}</small></h2>${
       p.description ? `<p style="color:#63716b;margin:4px 0 10px">${esc(p.description)}</p>` : ''
@@ -2589,19 +2687,22 @@ function localAiPlaceholder(prompt) {
 // A provider is usable if it's the built-in local draft or a fully-configured
 // hosted endpoint. Each is tagged with routing metadata for the registry.
 function usableProviders() {
+  // Only REAL callable endpoints participate in routing — the built-in "Local
+  // draft" placeholder is a fallback, not a model, so it must not shadow a real
+  // local model (Ollama) by "passing" verification with placeholder text.
   return aiSettings.providers
-    .filter(p => p.type === 'local' || (p.endpoint && p.apiKey))
+    .filter(p => p.endpoint && p.apiKey)
     .map(p => ({
       id: p.id,
-      endpoint: p.endpoint || '',
-      apiKey: p.apiKey || '',
+      endpoint: p.endpoint,
+      apiKey: p.apiKey,
       model: p.model || '',
-      tier: p.tier || (p.type === 'local' ? 'cheap' : PROVIDER_CAP_DEFAULTS.tier),
-      location: p.location || (p.type === 'local' ? 'local' : PROVIDER_CAP_DEFAULTS.location),
-      sensitivityOK: p.sensitivityOK != null ? !!p.sensitivityOK : p.type === 'local',
+      tier: p.tier || PROVIDER_CAP_DEFAULTS.tier,
+      location: p.location || PROVIDER_CAP_DEFAULTS.location,
+      sensitivityOK: p.sensitivityOK != null ? !!p.sensitivityOK : p.location === 'local',
       costPer1k: Number.isFinite(p.costPer1k)
         ? p.costPer1k
-        : p.type === 'local'
+        : p.location === 'local'
         ? 0
         : PROVIDER_CAP_DEFAULTS.costPer1k,
       enabled: true,
@@ -2618,6 +2719,7 @@ async function orchCallModel(provider, payload) {
     };
   }
   const data = await aiHttp(provider, payload);
+  logActivity(activeProject(), 'orchCall', `data` + data, '');
   const content = data.choices?.[0]?.message?.content || data.output_text || data.result || '';
   return { content, tokensIn: data.usage?.prompt_tokens, tokensOut: data.usage?.completion_tokens };
 }
@@ -2640,7 +2742,9 @@ async function routedAiText(prompt, opts) {
       providers,
       verifySpec: opts.verifySpec || { minLen: 1 },
     },
-    { callModel: orchCallModel, policy: aiSettings.privacyPolicy || 'hard' }
+    // bestEffort: with only local models on hand, use the strongest available
+    // rather than falling back to a useless placeholder (privacy stays hard).
+    { callModel: orchCallModel, policy: aiSettings.privacyPolicy || 'hard', bestEffort: true }
   );
   const r = out.routing;
   if (!r.chosen) {
@@ -2651,18 +2755,19 @@ async function routedAiText(prompt, opts) {
     return localAiPlaceholder(prompt);
   }
   const provName = aiSettings.providers.find(p => p.id === r.chosen)?.name || r.chosen;
+  const under = r.underProvisioned ? ' (best-effort)' : '';
   const proj = activeProject();
   if (proj)
     logActivity(
       proj,
       'route',
-      `${opts.task || 'task'} → ${provName} [${out.classification.class}]${
+      `${opts.task || 'task'} → ${provName} [${out.classification.class}]${under}${
         r.escalations ? ` after ${r.escalations} escalation(s)` : ''
       } · ~${r.tokensIn + r.tokensOut} tok${r.estCost ? ` · ~$${r.estCost}` : ' · free'}`,
       ''
     );
   toast(
-    `Routed ${out.classification.class} → ${provName}${
+    `Routed ${out.classification.class} → ${provName}${under}${
       r.escalations ? ` (escalated ${r.escalations}×)` : ''
     }${r.estCost ? ` · ~$${r.estCost}` : ' · free'}`
   );
@@ -2839,7 +2944,7 @@ function excalidrawToSvg(content) {
           return '';
       }
     });
-    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;background:#fff;border-radius:6px">${parts.join(
+    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;background:var(--panel);border-radius:6px">${parts.join(
       ''
     )}</svg>`;
   } catch {
@@ -3440,12 +3545,1240 @@ function openSimpleForm(kind) {
   d.showModal();
 }
 
+// --- Playground: per-project journey simulator (Postman-style + UI mock preview) ---
+let playgroundJourneyId = null;
+let playgroundPlaying = false;
+const METHOD_COLOR = {
+  GET: '#257453',
+  POST: '#185fa5',
+  PUT: '#9c6813',
+  PATCH: '#725ac1',
+  DELETE: '#b83f2c',
+};
+function projectJourneys() {
+  return activeProject()?.journeys || [];
+}
+function currentJourney() {
+  const js = projectJourneys();
+  return js.find(j => j.id === playgroundJourneyId) || js[0] || null;
+}
+function nextJourneyId(p) {
+  const m = (p.journeys || []).reduce((a, j) => {
+    const x = String(j.id).match(/^JNY-(\d+)$/);
+    return x ? Math.max(a, +x[1]) : a;
+  }, 0);
+  return `JNY-${String(m + 1).padStart(3, '0')}`;
+}
+function nextStepId(j) {
+  const m = (j.steps || []).reduce((a, s) => {
+    const x = String(s.id).match(/^STP-(\d+)$/);
+    return x ? Math.max(a, +x[1]) : a;
+  }, 0);
+  return `STP-${String(m + 1).padStart(3, '0')}`;
+}
+function prettyJson(s) {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return String(s || '');
+  }
+}
+
+function journeyMapSvg(j, activeId) {
+  const steps = j.steps;
+  if (!steps.length) return '';
+  const W = 150,
+    H = 52,
+    GAP = 40,
+    M = 12;
+  const fullW = M * 2 + steps.length * W + (steps.length - 1) * GAP,
+    fullH = H + M * 2;
+  const parts = [];
+  steps.forEach((s, i) => {
+    const x = M + i * (W + GAP),
+      y = M,
+      active = s.id === activeId;
+    if (i > 0) {
+      const px = M + (i - 1) * (W + GAP) + W;
+      parts.push(
+        `<path d="M ${px} ${y + H / 2} L ${x} ${
+          y + H / 2
+        }" stroke="#c7d0ca" stroke-width="2" fill="none"/>`
+      );
+    }
+    const badge = s.kind === 'screen' ? '🖥' : s.method;
+    const col = s.kind === 'screen' ? '#725ac1' : METHOD_COLOR[s.method] || '#5a6b63';
+    const name = wrapText(s.name, 20, 1)[0];
+    parts.push(
+      `<g><rect x="${x}" y="${y}" width="${W}" height="${H}" rx="9" fill="${
+        active ? '#e3f5ea' : '#fff'
+      }" stroke="${active ? '#167554' : '#d5ddd6'}" stroke-width="${
+        active ? 2.5 : 1.4
+      }"/><text x="${x + 11}" y="${y + 20}" style="font:700 10px 'DM Mono';fill:${col}">${esc(
+        badge
+      )}</text><text x="${x + 11}" y="${y + 38}" style="font:700 11px Manrope;fill:#172521">${esc(
+        name
+      )}</text></g>`
+    );
+  });
+  return `<svg viewBox="0 0 ${fullW} ${fullH}" width="${fullW}" height="${fullH}" xmlns="http://www.w3.org/2000/svg" style="max-width:100%">${parts.join(
+    ''
+  )}</svg>`;
+}
+
+function stepPreviewHtml(s, journey) {
+  if (s.kind === 'screen') {
+    const html =
+      s.response ||
+      '<div style="padding:24px;color:#82908a;font:14px sans-serif">No mock screen yet. Edit this step or use ✨ Generate mock.</div>';
+    return `<div class="pg-screen-wrap"><iframe class="pg-screen" sandbox="" srcdoc="${esc(
+      html
+    )}"></iframe></div>`;
+  }
+  const url = (journey.baseUrl || '') + s.path;
+  const col = METHOD_COLOR[s.method] || '#5a6b63';
+  return `<div class="pg-http">
+    <div class="pg-req"><div class="pg-line"><span class="pg-method" style="background:${col}">${esc(
+    s.method
+  )}</span><code>${esc(url) || '<em>no path</em>'}</code></div>${
+    s.request
+      ? `<pre class="pg-body">${esc(prettyJson(s.request))}</pre>`
+      : '<p class="list-meta" style="margin:6px 0 0">No request body.</p>'
+  }</div>
+    <div class="pg-res"><div class="pg-line"><span class="pg-status ${
+      s.status >= 400 ? 'err' : s.status >= 300 ? 'warn' : 'ok'
+    }">${s.status}</span><span class="list-meta">${
+    s.latencyMs ? s.latencyMs + ' ms (mock)' : 'mock response'
+  }</span></div>${
+    s.response
+      ? `<pre class="pg-body">${esc(prettyJson(s.response))}</pre>`
+      : '<p class="list-meta" style="margin:6px 0 0">No mock response yet — edit or ✨ Generate.</p>'
+  }</div>
+  </div>`;
+}
+
+function renderPlayground() {
+  const el = $('#playgroundView');
+  if (!el) return;
+  const project = activeProject();
+  if (!project) {
+    el.innerHTML = '';
+    return;
+  }
+  const journeys = project.journeys || [];
+  const j = currentJourney();
+  if (j) playgroundJourneyId = j.id;
+  const head = `<div class="view-head"><div><p class="eyebrow">SIMULATION PLAYGROUND</p><h1>Journey playground</h1><p class="subcopy">Step through this project's flows with mock data — like Postman for a backend journey, plus rendered UI screens — to see and demo how a journey behaves. Nothing here calls a live backend.</p></div><div style="display:flex;gap:8px"><button class="button" id="pgSeed">Seed example</button><button class="button primary" id="pgNew">+ Journey</button></div></div>`;
+  if (!journeys.length) {
+    el.innerHTML =
+      head +
+      `<div class="list-card"><p style="padding:20px;color:var(--muted)">No journeys yet. Create one, or click <strong>Seed example</strong> for a starter flow you can run and edit.</p></div>`;
+    $('#pgNew').onclick = () => openJourneyForm();
+    $('#pgSeed').onclick = () => seedExampleJourney();
+    return;
+  }
+  const tabs = journeys
+    .map(
+      x =>
+        `<button class="pg-tab${x.id === j.id ? ' active' : ''}" data-jny="${esc(x.id)}">${esc(
+          x.name
+        )}</button>`
+    )
+    .join('');
+  const activeStep = j.steps.find(s => s.id === j.activeStepId) || j.steps[0];
+  const stepList = j.steps.length
+    ? j.steps
+        .map(
+          (s, i) =>
+            `<div class="pg-step${
+              s.id === (activeStep && activeStep.id) ? ' active' : ''
+            }" data-step="${esc(s.id)}"><span class="pg-step-badge" style="color:${
+              s.kind === 'screen' ? '#725ac1' : METHOD_COLOR[s.method] || '#5a6b63'
+            }">${s.kind === 'screen' ? '🖥' : esc(s.method)}</span><span class="pg-step-name">${esc(
+              s.name
+            )}</span><span class="pg-step-tools"><button class="button" data-step-up="${esc(
+              s.id
+            )}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="button" data-step-edit="${esc(
+              s.id
+            )}">Edit</button><button class="button danger" data-step-del="${esc(
+              s.id
+            )}">✕</button></span></div>`
+        )
+        .join('')
+    : '<p class="list-meta" style="padding:10px">No steps yet — add one.</p>';
+  el.innerHTML =
+    head +
+    `<div class="pg-tabs">${tabs}</div>
+     <div class="pg-layout">
+       <div class="pg-steps-col"><div class="pg-steps-head"><strong>${esc(
+         j.name
+       )}</strong><button class="button" id="pgAddStep">+ Step</button></div>${
+      j.description
+        ? `<p class="subcopy" style="margin:0 0 8px;max-width:none">${esc(j.description)}</p>`
+        : ''
+    }<div class="pg-steps">${stepList}</div><p style="margin:10px 0 0"><button class="button" data-jny-edit="${esc(
+      j.id
+    )}">Edit journey</button> <button class="button danger" data-jny-del="${esc(
+      j.id
+    )}">Delete journey</button></p></div>
+       <div class="pg-preview-col">
+         <div class="pg-run-bar"><button class="button" id="pgPrev">◀ Prev</button><button class="button primary" id="pgPlay">${
+           playgroundPlaying ? '⏸ Stop' : '▶ Run'
+         }</button><button class="button" id="pgNext">Next ▶</button><button class="button" id="pgReset">⟲ Reset</button><span class="list-meta" style="margin-left:auto">Step ${
+      Math.max(
+        0,
+        j.steps.findIndex(s => s.id === (activeStep && activeStep.id))
+      ) + 1
+    } / ${j.steps.length}</span></div>
+         <div class="branch-scroll" style="margin:0 0 12px">${journeyMapSvg(
+           j,
+           activeStep && activeStep.id
+         )}</div>
+         ${
+           activeStep
+             ? `<div class="pg-active-head"><strong>${esc(
+                 activeStep.name
+               )}</strong> <button class="button" data-step-edit="${esc(
+                 activeStep.id
+               )}">Edit</button> <button class="button" data-gen="${esc(
+                 activeStep.id
+               )}">✨ Generate mock</button></div>${
+                 activeStep.note
+                   ? `<p class="subcopy" style="max-width:none;margin:4px 0 8px">${esc(
+                       activeStep.note
+                     )}</p>`
+                   : ''
+               }${stepPreviewHtml(activeStep, j)}`
+             : '<p class="subcopy">Add a step to preview it.</p>'
+         }
+       </div>
+     </div>`;
+  $('#pgNew').onclick = () => openJourneyForm();
+  $('#pgSeed').onclick = () => seedExampleJourney();
+  $('#pgAddStep').onclick = () => openStepForm(j);
+  el.querySelectorAll('[data-jny]').forEach(
+    b =>
+      (b.onclick = () => {
+        playgroundPlaying = false;
+        playgroundJourneyId = b.dataset.jny;
+        renderPlayground();
+      })
+  );
+  el.querySelectorAll('[data-step]').forEach(
+    row =>
+      (row.onclick = e => {
+        if (e.target.closest('button')) return;
+        j.activeStepId = row.dataset.step;
+        save();
+        renderPlayground();
+      })
+  );
+  el.querySelectorAll('[data-step-edit]').forEach(
+    b =>
+      (b.onclick = () =>
+        openStepForm(
+          j,
+          j.steps.find(s => s.id === b.dataset.stepEdit)
+        ))
+  );
+  el.querySelectorAll('[data-step-del]').forEach(
+    b =>
+      (b.onclick = () => {
+        j.steps = j.steps.filter(s => s.id !== b.dataset.stepDel);
+        if (j.activeStepId === b.dataset.stepDel) j.activeStepId = j.steps[0]?.id || '';
+        save();
+        renderPlayground();
+      })
+  );
+  el.querySelectorAll('[data-step-up]').forEach(
+    b =>
+      (b.onclick = () => {
+        const i = j.steps.findIndex(s => s.id === b.dataset.stepUp);
+        if (i > 0) {
+          [j.steps[i - 1], j.steps[i]] = [j.steps[i], j.steps[i - 1]];
+          save();
+          renderPlayground();
+        }
+      })
+  );
+  el.querySelectorAll('[data-jny-edit]').forEach(b => (b.onclick = () => openJourneyForm(j)));
+  el.querySelectorAll('[data-jny-del]').forEach(
+    b =>
+      (b.onclick = () => {
+        if (confirm(`Delete journey "${j.name}"?`)) {
+          project.journeys = project.journeys.filter(x => x.id !== j.id);
+          playgroundJourneyId = null;
+          save();
+          renderPlayground();
+        }
+      })
+  );
+  el.querySelectorAll('[data-gen]').forEach(
+    b =>
+      (b.onclick = () =>
+        generateStepMock(
+          j,
+          j.steps.find(s => s.id === b.dataset.gen),
+          b
+        ))
+  );
+  const stepIds = j.steps.map(s => s.id);
+  const curIdx = () => Math.max(0, stepIds.indexOf(j.activeStepId));
+  $('#pgPrev').onclick = () => {
+    if (!stepIds.length) return;
+    playgroundPlaying = false;
+    j.activeStepId = stepIds[Math.max(0, curIdx() - 1)];
+    save();
+    renderPlayground();
+  };
+  $('#pgNext').onclick = () => {
+    if (!stepIds.length) return;
+    playgroundPlaying = false;
+    j.activeStepId = stepIds[Math.min(stepIds.length - 1, curIdx() + 1)];
+    save();
+    renderPlayground();
+  };
+  $('#pgReset').onclick = () => {
+    if (!stepIds.length) return;
+    playgroundPlaying = false;
+    j.activeStepId = stepIds[0];
+    save();
+    renderPlayground();
+  };
+  $('#pgPlay').onclick = () => playJourney(j);
+}
+
+function playJourney(j) {
+  if (playgroundPlaying) {
+    playgroundPlaying = false;
+    renderPlayground();
+    return;
+  }
+  const ids = j.steps.map(s => s.id);
+  if (!ids.length) return;
+  playgroundPlaying = true;
+  let i = 0;
+  j.activeStepId = ids[0];
+  save();
+  renderPlayground();
+  const tick = () => {
+    if (!playgroundPlaying) return;
+    i++;
+    if (i >= ids.length) {
+      playgroundPlaying = false;
+      renderPlayground();
+      return;
+    }
+    j.activeStepId = ids[i];
+    save();
+    renderPlayground();
+    setTimeout(tick, 950);
+  };
+  setTimeout(tick, 950);
+}
+
+function openJourneyForm(existing) {
+  const project = activeProject();
+  const j = existing || { name: '', description: '', baseUrl: '' };
+  const d = $('#questionDialog');
+  d.innerHTML = `<form class="dialog-body"><h2>${
+    existing ? 'Edit' : 'New'
+  } journey</h2><div class="field"><label>Name</label><input name="name" value="${esc(
+    j.name
+  )}" required placeholder="e.g. Index & search a repo"></div><div class="field"><label>Description</label><textarea name="description" placeholder="What flow does this simulate?">${esc(
+    j.description
+  )}</textarea></div><div class="field"><label>Base URL (optional, for request steps)</label><input name="baseUrl" value="${esc(
+    j.baseUrl
+  )}" placeholder="http://localhost:8080"></div><div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary">Save journey</button></div></form>`;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('form').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const item = {
+      name: f.get('name').trim(),
+      description: f.get('description').trim(),
+      baseUrl: f.get('baseUrl').trim(),
+    };
+    if (existing) Object.assign(existing, item);
+    else {
+      const nj = normalizeJourney(
+        { id: nextJourneyId(project), ...item, steps: [] },
+        project.journeys.length
+      );
+      project.journeys.push(nj);
+      playgroundJourneyId = nj.id;
+      logActivity(project, 'journey', `Journey created: ${nj.name}`, nj.id);
+    }
+    save();
+    d.close();
+    renderPlayground();
+    toast('Journey saved.');
+  };
+  d.showModal();
+}
+
+function openStepForm(journey, existing) {
+  const s = existing || {
+    name: '',
+    kind: 'request',
+    method: 'GET',
+    path: '',
+    request: '',
+    response: '',
+    status: 200,
+    latencyMs: 0,
+    note: '',
+  };
+  const d = $('#ticketDialog');
+  const isScreen = s.kind === 'screen';
+  d.innerHTML = `<form class="dialog-body" id="stepForm"><h2>${existing ? 'Edit' : 'New'} step</h2>
+    <div class="form-grid"><div class="field"><label>Name</label><input name="name" value="${esc(
+      s.name
+    )}" required></div><div class="field"><label>Kind</label><select name="kind">${[
+    ['request', 'API request (mock)'],
+    ['screen', 'UI screen (HTML mock)'],
+  ]
+    .map(([v, l]) => `<option value="${v}"${s.kind === v ? ' selected' : ''}>${l}</option>`)
+    .join('')}</select></div></div>
+    <div data-req-fields ${
+      isScreen ? 'hidden' : ''
+    }><div class="form-grid"><div class="field"><label>Method</label><select name="method">${[
+    'GET',
+    'POST',
+    'PUT',
+    'PATCH',
+    'DELETE',
+  ]
+    .map(m => `<option${s.method === m ? ' selected' : ''}>${m}</option>`)
+    .join(
+      ''
+    )}</select></div><div class="field"><label>Status</label><input name="status" type="number" value="${
+    s.status
+  }"></div></div><div class="field"><label>Path</label><input name="path" value="${esc(
+    s.path
+  )}" placeholder="/api/search"></div><div class="field"><label>Request body (JSON)</label><textarea name="request" style="font:12px 'DM Mono'">${esc(
+    s.request
+  )}</textarea></div></div>
+    <div class="field"><label data-resp-label>${
+      isScreen ? 'Mock screen HTML' : 'Mock response (JSON)'
+    }</label><textarea name="response" style="min-height:140px;font:12px 'DM Mono'">${esc(
+    s.response
+  )}</textarea></div>
+    <div class="field"><label>Note (shown in preview)</label><input name="note" value="${esc(
+      s.note
+    )}"></div>
+    <div class="dialog-actions"><button class="button" type="button" data-gen-step>✨ Generate mock</button><button class="button" type="button" data-close>Cancel</button><button class="button primary">Save step</button></div></form>`;
+  const form = d.querySelector('form');
+  const sync = () => {
+    const scr = form.elements.kind.value === 'screen';
+    form.querySelector('[data-req-fields]').hidden = scr;
+    form.querySelector('[data-resp-label]').textContent = scr
+      ? 'Mock screen HTML'
+      : 'Mock response (JSON)';
+  };
+  form.elements.kind.onchange = sync;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('[data-gen-step]').onclick = async ev => {
+    const draft = readStepForm(form, s);
+    ev.target.disabled = true;
+    ev.target.textContent = 'Generating…';
+    const out = await generateMockContent(journey, draft);
+    if (out != null) {
+      form.elements.response.value = out;
+    }
+    ev.target.disabled = false;
+    ev.target.textContent = '✨ Generate mock';
+  };
+  form.onsubmit = e => {
+    e.preventDefault();
+    const item = readStepForm(form, s);
+    if (existing) Object.assign(existing, item);
+    else {
+      const ns = normalizeStep({ id: nextStepId(journey), ...item }, journey.steps.length);
+      journey.steps.push(ns);
+      journey.activeStepId = ns.id;
+    }
+    save();
+    d.close();
+    renderPlayground();
+    toast('Step saved.');
+  };
+  d.showModal();
+}
+function readStepForm(form, base) {
+  const f = new FormData(form);
+  return {
+    ...base,
+    name: f.get('name').trim(),
+    kind: f.get('kind'),
+    method: f.get('method') || base.method || 'GET',
+    path: (f.get('path') || '').trim(),
+    request: f.get('request') || '',
+    response: f.get('response') || '',
+    status: Number(f.get('status')) || 200,
+    note: (f.get('note') || '').trim(),
+  };
+}
+
+// Optional AI assist — generate realistic mock data/screens with the local model (free).
+function mockPrompt(journey, step) {
+  const ctx = `Project: ${activeProject()?.name}. Journey: ${journey.name}. ${
+    journey.description || ''
+  }`;
+  if (step.kind === 'screen') {
+    return `${ctx}\nGenerate a SELF-CONTAINED HTML snippet (inline CSS only, NO <script>, no external resources) mocking the UI screen "${step.name}" populated with realistic mock data. Return ONLY the HTML, no explanation, no code fences.`;
+  }
+  return `${ctx}\nFor the API step "${step.name}" (${step.method} ${step.path})${
+    step.request ? ` with request body ${step.request}` : ''
+  }, generate a realistic mock JSON response body a backend would return (status ${
+    step.status
+  }). Return ONLY the JSON, no explanation, no code fences.`;
+}
+function stripFences(text) {
+  const m = String(text || '').match(/```[a-z]*\s*([\s\S]*?)```/i);
+  return (m ? m[1] : String(text || '')).trim();
+}
+async function generateMockContent(journey, step) {
+  try {
+    const raw = await requestAiText(mockPrompt(journey, step), {
+      task: step.kind === 'screen' ? 'ticket_draft' : 'ac_tick',
+    });
+    if (/Local AI placeholder/.test(raw)) {
+      toast('Configure an AI provider or enable a local model to generate mocks.');
+      return null;
+    }
+    return stripFences(raw);
+  } catch (err) {
+    toast(`Generate failed: ${err.message}`);
+    return null;
+  }
+}
+async function generateStepMock(journey, step, btn) {
+  if (!step) return;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Generating…';
+  }
+  const out = await generateMockContent(journey, step);
+  if (out != null) {
+    step.response = out;
+    save();
+    renderPlayground();
+    toast('Mock generated.');
+  } else if (btn) {
+    btn.disabled = false;
+    btn.textContent = '✨ Generate mock';
+  }
+}
+
+function seedExampleJourney() {
+  const project = activeProject();
+  const j = normalizeJourney(
+    {
+      id: nextJourneyId(project),
+      name: 'Example — index & search',
+      description:
+        'A starter flow you can edit: ingest a repo, poll the job, search, then view the results screen.',
+      baseUrl: 'http://localhost:8080',
+      steps: [
+        {
+          name: 'Start ingest',
+          kind: 'request',
+          method: 'POST',
+          path: '/api/ingest',
+          status: 202,
+          request: '{\n  "repo": "octocat/hello-world",\n  "branch": "main"\n}',
+          response: '{\n  "jobId": "job_4f2a",\n  "status": "queued"\n}',
+          note: 'Kick off ingestion of a repository.',
+        },
+        {
+          name: 'Poll job',
+          kind: 'request',
+          method: 'GET',
+          path: '/api/jobs/job_4f2a',
+          status: 200,
+          response: '{\n  "jobId": "job_4f2a",\n  "status": "embedding",\n  "chunks": 42\n}',
+          note: 'Poll until embedding completes.',
+        },
+        {
+          name: 'Search',
+          kind: 'request',
+          method: 'POST',
+          path: '/api/search',
+          status: 200,
+          request: '{\n  "query": "rate limiting"\n}',
+          response:
+            '{\n  "results": [\n    { "path": "src/RateLimiter.java", "score": 0.91 },\n    { "path": "docs/limits.md", "score": 0.78 }\n  ]\n}',
+          note: 'Semantic search over the indexed repo.',
+        },
+        {
+          name: 'Results screen',
+          kind: 'screen',
+          response:
+            '<div style="font-family:system-ui;padding:20px;max-width:520px">\n  <h2 style="margin:0 0 4px">Search results</h2>\n  <p style="color:#667">query: <b>rate limiting</b></p>\n  <ul style="list-style:none;padding:0">\n    <li style="border:1px solid #dce2dc;border-radius:8px;padding:12px;margin:8px 0"><b>src/RateLimiter.java</b><span style="float:right;color:#167554">0.91</span></li>\n    <li style="border:1px solid #dce2dc;border-radius:8px;padding:12px;margin:8px 0"><b>docs/limits.md</b><span style="float:right;color:#167554">0.78</span></li>\n  </ul>\n</div>',
+          note: 'How the results look to a user.',
+        },
+      ],
+    },
+    project.journeys.length
+  );
+  project.journeys.push(j);
+  playgroundJourneyId = j.id;
+  logActivity(project, 'journey', `Seeded example journey: ${j.name}`, j.id);
+  save();
+  renderPlayground();
+  toast('Example journey added — press ▶ Run to step through it.');
+}
+
+// --- Coder: project-grounded agentic coding assistant on local models ---------
+// Human-in-the-loop: the model can read/list freely, but every write shows a diff
+// you Apply and every command shows a Run confirm. All file/shell access is scoped
+// to a workdir you pick and runs in the Electron main process (desktop only).
+const CODER_WORKDIRS_KEY = 'devtracker:coder-workdirs:v1';
+const coderState = {}; // projectId -> { workdir, messages, log, busy, iter }
+let coderStreamActive = false; // suppress health re-probes during a live stream
+function loadCoderWorkdirs() {
+  try {
+    return JSON.parse(localStorage.getItem(CODER_WORKDIRS_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+function saveCoderWorkdir(projectId, dir) {
+  const m = loadCoderWorkdirs();
+  m[projectId] = dir;
+  localStorage.setItem(CODER_WORKDIRS_KEY, JSON.stringify(m));
+}
+function coderSession() {
+  const id = activeProject()?.id;
+  if (!id) return null;
+  if (!coderState[id])
+    coderState[id] = {
+      workdir: loadCoderWorkdirs()[id] || '',
+      messages: [],
+      log: [],
+      busy: false,
+      tree: [],
+      treeLoaded: false,
+      attached: [],
+    };
+  return coderState[id];
+}
+async function loadCoderTree(s) {
+  if (!s || !s.workdir || !window.desktopApi?.coder?.tree) return;
+  const r = await window.desktopApi.coder.tree(s.workdir);
+  s.tree = r.ok ? r.items : [];
+  s.treeLoaded = true;
+}
+function coderProvider() {
+  // The user's active provider wins when it's a usable local model (lets them
+  // pick 3b vs 7b in AI settings); otherwise the strongest local model on the
+  // list; otherwise any usable provider.
+  const usable = x => x.endpoint && x.apiKey;
+  const active = activeProvider();
+  if (active && active.location === 'local' && usable(active)) return active;
+  const locals = aiSettings.providers.filter(x => x.location === 'local' && usable(x));
+  if (locals.length) {
+    const rank = { cheap: 0, mid: 1, strong: 2 };
+    return locals.sort((a, b) => (rank[b.tier] || 0) - (rank[a.tier] || 0))[0];
+  }
+  return aiSettings.providers.find(usable) || null;
+}
+function coderBriefing() {
+  const p = activeProject();
+  if (!p) return '';
+  const cons =
+    (p.constraints || [])
+      .filter(c => c.active)
+      .map(c => `- ${c.text}`)
+      .join('\n') || '- (none)';
+  const dec =
+    p.decisions
+      .filter(d => d.status === 'decided')
+      .map(d => `- ${d.id}: ${d.title} → ${d.choice}`)
+      .join('\n') || '- (none)';
+  const next = p.tickets.find(
+    t =>
+      t.status !== 'done' &&
+      (t.deps || []).every(id => p.tickets.find(x => x.id === id)?.status === 'done')
+  );
+  return `Project: ${p.name}\n${
+    p.description || ''
+  }\n\nStanding constraints (must respect):\n${cons}\n\nDecided (do not re-litigate):\n${dec}${
+    next ? `\n\nNext unblocked ticket: ${next.id} — ${next.title}` : ''
+  }`;
+}
+function coderFileListForPrompt(s) {
+  const files = (s?.tree || []).filter(t => !t.dir).map(t => t.path);
+  if (!files.length) return '';
+  const shown = files.slice(0, 200);
+  return `\n\nActual files in the repository (use these EXACT paths — do not invent paths):\n${shown
+    .map(f => `- ${f}`)
+    .join('\n')}${
+    files.length > shown.length ? `\n- …and ${files.length - shown.length} more` : ''
+  }`;
+}
+function coderSystemPrompt(s) {
+  return `You are a coding assistant working inside a project's repository, grounded in its DevTracker memory below. You act step by step using TOOLS.
+
+${coderBriefing()}${coderFileListForPrompt(s)}
+
+To use a tool, reply with ONLY a fenced block (no prose around it):
+\`\`\`coder-tool
+{"tool":"read_file","path":"src/App.js"}
+\`\`\`
+Tools:
+- {"tool":"list_dir","path":"."}                    list files in a folder
+- {"tool":"read_file","path":"src/App.js"}          read a file before editing it
+- {"tool":"write_file","path":"src/App.js","content":"<COMPLETE new file contents>"}
+- {"tool":"run_command","command":"npm test"}       run a shell command in the repo
+- {"tool":"done","summary":"what you did"}           finish
+
+Rules:
+- ONE tool per message. After each tool you receive its result, then continue.
+- Use ONLY paths that exist in the file list above (or create a new file at a sensible path). Never guess a "src/" prefix that isn't there.
+- ALWAYS read a file before writing it. write_file must contain the ENTIRE new file, not a fragment.
+- Work INCREMENTALLY: change ONE file per write_file. Never try to rewrite or convert many files in a single step — do one, then continue.
+- Keep changes minimal and respect the constraints above.
+- If a request is too large, do the smallest useful first step and use done to report what remains.
+- When the task is complete, use the done tool.`;
+}
+async function coderModelCall(messages, onStream, sessionRef) {
+  const provider = coderProvider();
+  if (!provider)
+    throw new Error('No local model configured. Add an Ollama provider in AI settings.');
+  const payload = { messages, temperature: 0.1 };
+  if (provider.model) payload.model = provider.model;
+  if (onStream && canStream(provider)) {
+    let full = '',
+      err = null,
+      last = 0;
+    coderStreamActive = true;
+    const p = window.desktopApi.aiStream(
+      { endpoint: provider.endpoint, apiKey: provider.apiKey, payload },
+      ev => {
+        if (ev.delta) {
+          full += ev.delta;
+          const now = Date.now();
+          if (now - last > 120) {
+            last = now;
+            onStream(full);
+          }
+        } else if (ev.error) err = ev.error;
+      }
+    );
+    if (sessionRef) sessionRef.currentStream = p;
+    try {
+      await p;
+    } finally {
+      coderStreamActive = false;
+      if (sessionRef) sessionRef.currentStream = null;
+    }
+    if (err) throw new Error(err);
+    onStream(full);
+    return full;
+  }
+  const data = await aiHttp(provider, payload);
+  return data.choices?.[0]?.message?.content || data.output_text || data.result || '';
+}
+function parseCoderTool(reply) {
+  const re = /```(?:coder-tool|json)?\s*([\s\S]*?)```/i;
+  let m = reply.match(re),
+    raw = m ? m[1] : null;
+  if (!raw) {
+    const b = reply.match(/\{[\s\S]*"tool"[\s\S]*\}/);
+    raw = b ? b[0] : null;
+  }
+  let tool = null;
+  if (raw) {
+    try {
+      tool = JSON.parse(raw.trim());
+    } catch {
+      tool = null;
+    }
+  }
+  const text = m ? reply.replace(re, '').trim() : tool ? '' : reply.trim();
+  return { text, tool: tool && tool.tool ? tool : null };
+}
+function coderTrimDiff(oldStr, newStr) {
+  const a = String(oldStr).split('\n'),
+    b = String(newStr).split('\n');
+  let s = 0;
+  while (s < a.length && s < b.length && a[s] === b[s]) s++;
+  let ea = a.length,
+    eb = b.length;
+  while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) {
+    ea--;
+    eb--;
+  }
+  return {
+    ctxTop: a.slice(Math.max(0, s - 2), s),
+    removed: a.slice(s, ea),
+    added: b.slice(s, eb),
+    ctxBot: a.slice(ea, Math.min(a.length, ea + 2)),
+    isNew: !oldStr,
+  };
+}
+function coderDiffHtml(oldStr, newStr) {
+  const d = coderTrimDiff(oldStr, newStr);
+  if (d.isNew)
+    return `<pre class="coder-diff">${
+      d.added.map(l => `<span class="add">+ ${esc(l)}</span>`).join('\n') ||
+      '<span class="ctx">(empty file)</span>'
+    }</pre>`;
+  const rows = [
+    ...d.ctxTop.map(l => `<span class="ctx">  ${esc(l)}</span>`),
+    ...d.removed.map(l => `<span class="del">- ${esc(l)}</span>`),
+    ...d.added.map(l => `<span class="add">+ ${esc(l)}</span>`),
+    ...d.ctxBot.map(l => `<span class="ctx">  ${esc(l)}</span>`),
+  ];
+  return `<pre class="coder-diff">${
+    rows.join('\n') || '<span class="ctx">(no textual change)</span>'
+  }</pre>`;
+}
+async function runCoderReadTool(s, tool) {
+  const api = window.desktopApi.coder;
+  if (tool.tool === 'list_dir') {
+    const r = await api.listDir(s.workdir, tool.path || '.');
+    return r.ok
+      ? r.items.map(i => (i.dir ? i.name + '/' : i.name)).join('\n') || '(empty)'
+      : `ERROR: ${r.error}`;
+  }
+  const r = await api.readFile(s.workdir, tool.path || '');
+  return r.ok ? r.content : `ERROR: ${r.error}`;
+}
+function coderAwaitApproval(s, item) {
+  return new Promise(resolve => {
+    item.resolve = resolve;
+    s.log.push(item);
+    renderCoder();
+  });
+}
+async function coderLoop(s) {
+  s.busy = true;
+  s.stop = false;
+  renderCoder();
+  try {
+    for (let i = 0; i < 14; i++) {
+      if (s.stop) {
+        s.log.push({ type: 'done', text: '⏹ Stopped.' });
+        break;
+      }
+      let reply;
+      // Live "thinking" bubble that streams the model's raw output for this turn,
+      // then is removed once we've parsed out the prose/tool from it.
+      const streamItem = { type: 'stream', text: '' };
+      s.log.push(streamItem);
+      try {
+        reply = await coderModelCall(
+          s.messages,
+          full => {
+            const p = splitThinking(full);
+            streamItem.text = p.thinking ? `💭 ${p.thinking}\n${p.answer}` : full;
+            renderCoder();
+          },
+          s
+        );
+      } catch (err) {
+        s.log.splice(s.log.indexOf(streamItem), 1);
+        s.log.push({ type: 'error', text: err.message });
+        break;
+      }
+      s.log.splice(s.log.indexOf(streamItem), 1);
+      if (s.stop) {
+        s.messages.push({ role: 'assistant', content: reply });
+        s.log.push({ type: 'done', text: '⏹ Stopped.' });
+        break;
+      }
+      s.messages.push({ role: 'assistant', content: reply });
+      const parsedReply = splitThinking(reply);
+      const { text, tool } = parseCoderTool(parsedReply.answer || reply);
+      if (parsedReply.thinking) s.log.push({ type: 'think', text: parsedReply.thinking });
+      if (text) s.log.push({ type: 'assistant', text });
+      if (!tool || tool.tool === 'done') {
+        if (tool && tool.summary) s.log.push({ type: 'done', text: tool.summary });
+        break;
+      }
+      if (tool.tool === 'list_dir' || tool.tool === 'read_file') {
+        const res = await runCoderReadTool(s, tool);
+        s.log.push({
+          type: 'tool',
+          tool: tool.tool,
+          arg: tool.path || '.',
+          text: res.length > 4000 ? res.slice(0, 4000) + '\n…(truncated)' : res,
+        });
+        s.messages.push({
+          role: 'user',
+          content: `TOOL RESULT (${tool.tool} ${tool.path || '.'}):\n${res.slice(0, 12000)}`,
+        });
+        renderCoder();
+        continue;
+      }
+      if (tool.tool === 'write_file') {
+        const rd = await window.desktopApi.coder.readFile(s.workdir, tool.path || '');
+        const old = rd.ok ? rd.content : '';
+        const verdict = await coderAwaitApproval(s, {
+          type: 'write',
+          path: tool.path || '',
+          old,
+          content: tool.content || '',
+        });
+        let result = verdict;
+        if (verdict === 'apply') {
+          const w = await window.desktopApi.coder.writeFile(
+            s.workdir,
+            tool.path,
+            tool.content || ''
+          );
+          result = w.ok ? 'applied and saved' : `write failed: ${w.error}`;
+          logActivity(activeProject(), 'coder', `Coder wrote ${tool.path}`, '');
+          if (w.ok) await loadCoderTree(s); // a new file may have appeared in the tree
+        }
+        s.messages.push({
+          role: 'user',
+          content: `TOOL RESULT (write_file ${tool.path}): ${result}`,
+        });
+        renderCoder();
+        continue;
+      }
+      if (tool.tool === 'run_command') {
+        const verdict = await coderAwaitApproval(s, { type: 'cmd', command: tool.command || '' });
+        let result = 'skipped by user';
+        if (verdict === 'run') {
+          const r = await window.desktopApi.coder.runCommand(s.workdir, tool.command);
+          result = r.ok
+            ? `exit ${r.code}\nSTDOUT:\n${(r.stdout || '').slice(0, 4000)}\nSTDERR:\n${(
+                r.stderr || ''
+              ).slice(0, 2000)}`
+            : `ERROR: ${r.error}`;
+          const li = s.log.find(x => x.type === 'cmd' && x.command === tool.command && x.done);
+          if (li) li.output = result;
+          logActivity(activeProject(), 'coder', `Coder ran: ${tool.command}`, '');
+        }
+        s.messages.push({
+          role: 'user',
+          content: `TOOL RESULT (run_command): ${result.slice(0, 8000)}`,
+        });
+        renderCoder();
+        continue;
+      }
+      s.messages.push({
+        role: 'user',
+        content: `Unknown tool "${tool.tool}". Use list_dir, read_file, write_file, run_command, or done.`,
+      });
+    }
+  } finally {
+    s.busy = false;
+    renderCoder();
+  }
+}
+async function coderSend(text) {
+  const s = coderSession();
+  if (!s || s.busy) return;
+  const v = (text || '').trim();
+  if (!v) return;
+  if (!s.workdir) {
+    toast('Pick a working folder first.');
+    return;
+  }
+  if (!s.treeLoaded) await loadCoderTree(s); // ground the prompt in the real file list
+  if (!s.messages.length) s.messages.push({ role: 'system', content: coderSystemPrompt(s) });
+  // Pull in any files the user attached, so the model sees them without a read round-trip.
+  if (s.attached && s.attached.length) {
+    const parts = [];
+    for (const rel of s.attached) {
+      const r = await window.desktopApi.coder.readFile(s.workdir, rel);
+      if (r.ok) parts.push(`--- ${rel} ---\n${r.content}`);
+    }
+    if (parts.length) {
+      s.messages.push({
+        role: 'user',
+        content: `Attached files for context:\n\n${parts.join('\n\n')}`,
+      });
+      s.log.push({ type: 'attach', files: s.attached.slice() });
+    }
+    s.attached = [];
+  }
+  s.messages.push({ role: 'user', content: v });
+  s.log.push({ type: 'user', text: v });
+  coderLoop(s);
+}
+async function coderPickDir() {
+  const r = await window.desktopApi.coder.pickDir();
+  if (r.canceled) return;
+  if (!r.ok) {
+    toast(r.error || 'Could not select folder.');
+    return;
+  }
+  const s = coderSession();
+  s.workdir = r.path;
+  s.messages = [];
+  s.tree = [];
+  s.treeLoaded = false;
+  s.attached = [];
+  saveCoderWorkdir(activeProject().id, r.path);
+  await loadCoderTree(s);
+  renderCoder();
+}
+function toggleCoderAttach(rel) {
+  const s = coderSession();
+  if (!s) return;
+  s.attached = s.attached || [];
+  const i = s.attached.indexOf(rel);
+  if (i >= 0) s.attached.splice(i, 1);
+  else s.attached.push(rel);
+  renderCoder();
+}
+function coderLogItemHtml(item, i) {
+  if (item.type === 'user') return `<div class="coder-msg user">${esc(item.text)}</div>`;
+  if (item.type === 'stream')
+    return `<div class="coder-msg ai streaming">${esc(
+      item.text || ''
+    )}<span class="stream-cursor">▍</span></div>`;
+  if (item.type === 'think')
+    return `<details class="think-block"><summary>💭 thinking</summary><div class="think-body">${esc(
+      item.text
+    )}</div></details>`;
+  if (item.type === 'assistant') return `<div class="coder-msg ai">${esc(item.text)}</div>`;
+  if (item.type === 'done') return `<div class="coder-msg done">✓ ${esc(item.text)}</div>`;
+  if (item.type === 'error') return `<div class="coder-msg err">⚠ ${esc(item.text)}</div>`;
+  if (item.type === 'tool')
+    return `<details class="coder-tool"><summary>📄 ${esc(item.tool)} <code>${esc(
+      item.arg
+    )}</code></summary><pre>${esc(item.text)}</pre></details>`;
+  if (item.type === 'attach')
+    return `<div class="coder-msg attach">📎 attached: ${(item.files || [])
+      .map(f => `<code>${esc(f)}</code>`)
+      .join(' ')}</div>`;
+  if (item.type === 'write') {
+    const pending = !item.done;
+    const applied = item.verdict === 'apply';
+    return `<div class="coder-card"><div class="coder-card-head"><strong>✎ Write <code>${esc(
+      item.path
+    )}</code></strong>${
+      pending
+        ? `<span><button class="button primary" data-coder-apply="${i}">Apply</button> <button class="button" data-coder-skip="${i}">Skip</button></span>`
+        : `<span>${
+            applied
+              ? `<span class="status-pill done">applied</span>${
+                  item.undone
+                    ? ' <span class="status-pill">undone</span>'
+                    : ` <button class="button" data-coder-undo="${i}">↩ Undo</button>`
+                }`
+              : '<span class="status-pill">skipped</span>'
+          }</span>`
+    }</div>${coderDiffHtml(item.old, item.content)}</div>`;
+  }
+  if (item.type === 'cmd') {
+    const pending = !item.done;
+    return `<div class="coder-card"><div class="coder-card-head"><strong>▷ Run <code>${esc(
+      item.command
+    )}</code></strong>${
+      pending
+        ? `<span><button class="button primary" data-coder-run="${i}">Run</button> <button class="button" data-coder-skip="${i}">Skip</button></span>`
+        : `<span class="status-pill ${item.verdict === 'run' ? 'done' : ''}">${
+            item.verdict === 'run' ? 'ran' : 'skipped'
+          }</span>`
+    }</div>${item.output ? `<pre class="coder-diff">${esc(item.output)}</pre>` : ''}</div>`;
+  }
+  return '';
+}
+function renderCoder() {
+  const el = $('#coderView');
+  if (!el) return;
+  const project = activeProject();
+  if (!project) {
+    el.innerHTML = '';
+    return;
+  }
+  if (!window.desktopApi?.coder) {
+    el.innerHTML = `<div class="view-head"><div><p class="eyebrow">CODER</p><h1>Coder</h1><p class="subcopy">The project-grounded coding agent reads and edits real files, so it runs in the <strong>desktop app</strong> only. Open DevTracker via <code>npm start</code>.</p></div></div>`;
+    return;
+  }
+  const s = coderSession();
+  // Lazily load the file tree the first time the view is shown with a saved folder.
+  if (s.workdir && !s.treeLoaded && !s.treeLoading) {
+    s.treeLoading = true;
+    loadCoderTree(s).then(() => {
+      s.treeLoading = false;
+      renderCoder();
+    });
+  }
+  const provider = coderProvider();
+  const provNote = provider
+    ? `<span data-health-for="${esc(provider.id)}">${healthDotHtml(null)} ${esc(
+        provider.name
+      )} — checking…</span>`
+    : 'no local model — add one in AI settings';
+  const files = (s.tree || []).filter(t => !t.dir);
+  const attachedSet = new Set(s.attached || []);
+  const treeHtml = !s.workdir
+    ? '<p class="subcopy" style="padding:12px">No folder selected.</p>'
+    : !files.length
+    ? `<p class="subcopy" style="padding:12px">${
+        s.treeLoaded ? 'No files found.' : 'Loading files…'
+      }</p>`
+    : (s.tree || [])
+        .map(t =>
+          t.dir
+            ? `<div class="coder-file dir" style="padding-left:${8 + t.depth * 12}px">📁 ${esc(
+                t.path.split('/').pop()
+              )}</div>`
+            : `<div class="coder-file${
+                attachedSet.has(t.path) ? ' attached' : ''
+              }" style="padding-left:${8 + t.depth * 12}px" data-coder-file="${esc(
+                t.path
+              )}" title="Click to attach ${esc(t.path)} to your next message">${
+                attachedSet.has(t.path) ? '📎' : '📄'
+              } ${esc(t.path.split('/').pop())}</div>`
+        )
+        .join('');
+  const attachedBar = (s.attached || []).length
+    ? `<div class="coder-attached">📎 ${s.attached
+        .map(
+          f =>
+            `<span class="chip" data-coder-unattach="${esc(f)}">${esc(f.split('/').pop())} ✕</span>`
+        )
+        .join(' ')}</div>`
+    : '';
+  el.innerHTML = `<div class="view-head"><div><p class="eyebrow">CODER · ${esc(
+    project.name
+  )}</p><h1>Coding agent</h1><p class="subcopy">Grounded in this project's briefing, constraints &amp; file tree. Reads freely; every edit is a diff you Apply and every command needs your Run. Model: <strong>${provNote}</strong>.</p></div><div style="display:flex;gap:8px">${
+    s.busy ? '<button class="button danger" id="coderStop">⏹ Stop</button>' : ''
+  }<button class="button" id="coderPick">${
+    s.workdir ? 'Change folder' : '📂 Pick folder'
+  }</button>${
+    s.log.length && !s.busy ? '<button class="button" id="coderClear">Clear</button>' : ''
+  }</div></div>
+  <p class="list-meta" style="margin:10px 0 6px">${
+    s.workdir
+      ? '📂 ' + esc(s.workdir) + (files.length ? ` · ${files.length} files` : '')
+      : 'No working folder selected — pick your project repo to begin.'
+  }</p>
+  <div class="coder-layout">
+    <aside class="coder-files"><div class="coder-files-head"><strong>Files</strong>${
+      s.workdir ? '<button class="button" id="coderRefresh" title="Rescan files">⟳</button>' : ''
+    }</div><div class="coder-file-list">${treeHtml}</div></aside>
+    <div class="coder-main">
+      <div class="coder-log" id="coderLog">${
+        s.log.map((it, i) => coderLogItemHtml(it, i)).join('') ||
+        '<p class="subcopy" style="padding:16px">Ask for a change — e.g. "add a health check endpoint" or "write a test for the parser". Click files on the left to attach them for context. The agent reads files, proposes diffs, and runs commands with your approval.</p>'
+      }${
+    s.busy && !s.log.some(x => x.type === 'stream')
+      ? '<div class="coder-msg ai">…thinking<span class="stream-cursor">▍</span></div>'
+      : ''
+  }</div>
+      ${attachedBar}
+      <form class="coder-input" id="coderForm"><textarea rows="2" placeholder="${
+        s.workdir ? 'Describe a coding task…' : 'Pick a folder first'
+      }" ${
+    s.workdir && !s.busy ? '' : 'disabled'
+  }></textarea><button class="button primary" type="submit" ${
+    s.workdir && !s.busy ? '' : 'disabled'
+  }>Send</button></form>
+    </div>
+  </div>`;
+  $('#coderPick').onclick = () => coderPickDir();
+  const refresh = $('#coderRefresh');
+  if (refresh)
+    refresh.onclick = async () => {
+      await loadCoderTree(s);
+      renderCoder();
+    };
+  el.querySelectorAll('[data-coder-file]').forEach(
+    row => (row.onclick = () => toggleCoderAttach(row.dataset.coderFile))
+  );
+  el.querySelectorAll('[data-coder-unattach]').forEach(
+    c => (c.onclick = () => toggleCoderAttach(c.dataset.coderUnattach))
+  );
+  el.querySelectorAll('[data-coder-undo]').forEach(
+    b =>
+      (b.onclick = async () => {
+        const it = s.log[+b.dataset.coderUndo];
+        if (!it || it.undone) return;
+        const w = await window.desktopApi.coder.writeFile(s.workdir, it.path, it.old || '');
+        if (w.ok) {
+          it.undone = true;
+          logActivity(activeProject(), 'coder', `Reverted ${it.path}`, '');
+          await loadCoderTree(s);
+          renderCoder();
+          toast(`Reverted ${it.path}`);
+        } else toast(`Undo failed: ${w.error}`);
+      })
+  );
+  const stop = $('#coderStop');
+  if (stop)
+    stop.onclick = () => {
+      s.stop = true;
+      if (s.currentStream && s.currentStream.abort) s.currentStream.abort();
+      toast('Stopping the agent…');
+    };
+  const clear = $('#coderClear');
+  if (clear)
+    clear.onclick = () => {
+      s.log = [];
+      s.messages = [];
+      renderCoder();
+    };
+  el.querySelectorAll('[data-coder-apply]').forEach(
+    b =>
+      (b.onclick = () => {
+        const it = s.log[+b.dataset.coderApply];
+        it.done = true;
+        it.verdict = 'apply';
+        it.resolve && it.resolve('apply');
+        renderCoder();
+      })
+  );
+  el.querySelectorAll('[data-coder-run]').forEach(
+    b =>
+      (b.onclick = () => {
+        const it = s.log[+b.dataset.coderRun];
+        it.done = true;
+        it.verdict = 'run';
+        it.resolve && it.resolve('run');
+        renderCoder();
+      })
+  );
+  el.querySelectorAll('[data-coder-skip]').forEach(
+    b =>
+      (b.onclick = () => {
+        const it = s.log[+b.dataset.coderSkip];
+        it.done = true;
+        it.verdict = 'skip';
+        it.resolve && it.resolve('skip');
+        renderCoder();
+      })
+  );
+  const form = $('#coderForm');
+  if (form) {
+    form.onsubmit = e => {
+      e.preventDefault();
+      const ta = form.querySelector('textarea');
+      const v = ta.value;
+      ta.value = '';
+      coderSend(v);
+    };
+    form.querySelector('textarea').onkeydown = e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    };
+  }
+  const logEl = $('#coderLog');
+  if (logEl) logEl.scrollTop = logEl.scrollHeight;
+  if (provider && provider.endpoint && !coderStreamActive) updateHealthBadges(provider);
+}
+
 function setView(view) {
   [
     'home',
     'map',
     'context',
     'architecture',
+    'playground',
+    'coder',
     'git',
     'milestones',
     'decisions',
@@ -3488,6 +4821,22 @@ function importState(file) {
   reader.readAsText(file);
 }
 
+// Theme: apply saved preference on load, toggle from the topbar.
+const THEME_KEY = 'devtracker:theme';
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  const btn = $('#themeToggle');
+  if (btn) {
+    btn.textContent = t === 'dark' ? '☀️' : '🌙';
+    btn.title = t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  }
+}
+applyTheme(localStorage.getItem(THEME_KEY) || 'light');
+$('#themeToggle').onclick = () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+};
 $('#newTicketButton').onclick = () => openTicketForm();
 $('#addProjectButton').onclick = () => addProject();
 $('#aiSettingsButton').onclick = () => openAiSettings();
@@ -4081,16 +5430,68 @@ function chatActionCard(a, mi, ai) {
       : `<button class="button primary" data-apply-action="${mi}:${ai}">Apply / remember</button>`
   }</div>`;
 }
+// Split a reasoning-model reply into its <think> trace and its answer. Handles a
+// still-streaming, not-yet-closed <think>. Plain models (no tags) → all answer.
+function splitThinking(text) {
+  const s = String(text || '');
+  const closed = s.match(/<think>([\s\S]*?)<\/think>/i);
+  if (closed)
+    return {
+      thinking: closed[1].trim(),
+      answer: s.replace(/<think>[\s\S]*?<\/think>/i, '').trim(),
+      open: false,
+    };
+  const open = s.match(/<think>([\s\S]*)$/i);
+  if (open) return { thinking: open[1].trim(), answer: '', open: true };
+  return { thinking: '', answer: s, open: false };
+}
+function thinkingBlockHtml(m) {
+  if (!m.thinking) return '';
+  const openAttr = m.streaming && !m.content ? ' open' : '';
+  return `<details class="think-block"${openAttr}><summary>💭 thinking${
+    m.streaming && m.thinkOpen ? '…' : ''
+  }</summary><div class="think-body">${esc(m.thinking)}</div></details>`;
+}
 function chatBubble(m, i) {
   const mine = m.role === 'user';
   const actions = (m.actions || []).map((a, ai) => chatActionCard(a, i, ai)).join('');
+  const body =
+    m.streaming && !m.content
+      ? `<span class="stream-cursor">▍</span>`
+      : `${esc(m.content)}${m.streaming ? '<span class="stream-cursor">▍</span>' : ''}`;
   return `<div class="chat-msg ${esc(m.role)}" style="align-self:${
     mine ? 'flex-end' : 'flex-start'
   };max-width:88%;background:${mine ? '#1f3b34' : 'var(--card,#f4f6f5)'};color:${
     mine ? '#eafff6' : 'inherit'
-  };border:1px solid var(--line,#d9e0dd);border-radius:10px;padding:8px 12px"><div style="white-space:pre-wrap">${esc(
-    m.content
-  )}</div>${actions}</div>`;
+  };border:1px solid var(--line,#d9e0dd);border-radius:10px;padding:8px 12px">${thinkingBlockHtml(
+    m
+  )}<div style="white-space:pre-wrap">${body}</div>${actions}</div>`;
+}
+function canStream(provider) {
+  return !!window.desktopApi?.aiStream && provider && provider.endpoint && provider.apiKey;
+}
+async function streamChatCall(provider, messages, onFull) {
+  const payload = { messages, temperature: 0.3 };
+  if (provider.model) payload.model = provider.model;
+  let full = '',
+    err = null;
+  await window.desktopApi.aiStream(
+    { endpoint: provider.endpoint, apiKey: provider.apiKey, payload },
+    ev => {
+      if (ev.delta) {
+        full += ev.delta;
+        onFull(full);
+      } else if (ev.error) err = ev.error;
+    }
+  );
+  if (err) throw new Error(err);
+  return full;
+}
+function paintChatStream() {
+  ['#chatView', '#chatDrawerBody'].forEach(sel => {
+    const h = $(sel);
+    if (h && !h.hidden) renderChatMessages(h);
+  });
 }
 function renderChatMessages(host) {
   const project = activeProject();
@@ -4124,6 +5525,74 @@ function renderChatMessages(host) {
   );
   box.scrollTop = box.scrollHeight;
 }
+// --- Provider liveness ---------------------------------------------------------
+// A "connected" label is a lie unless we actually probe the endpoint. Cached 15s;
+// Electron pings via the main process, browser mode falls back to a no-cors fetch
+// (an opaque response still proves the server is up).
+async function checkProviderHealth(provider, force) {
+  if (!provider || !provider.endpoint) return null;
+  const cached = providerHealth[provider.id];
+  if (!force && cached && Date.now() - cached.ts < 15000) return cached.ok;
+  let ok = null;
+  try {
+    if (window.desktopApi?.aiPing) {
+      const r = await window.desktopApi.aiPing(provider.endpoint);
+      ok = !!r.ok;
+    } else {
+      const base = new URL(provider.endpoint);
+      await fetch(`${base.protocol}//${base.host}/`, {
+        method: 'GET',
+        mode: 'no-cors',
+        signal: AbortSignal.timeout(2500),
+      });
+      ok = true;
+    }
+  } catch {
+    ok = false;
+  }
+  providerHealth[provider.id] = { ok, ts: Date.now() };
+  return ok;
+}
+function healthDotHtml(state) {
+  const color = state === true ? '#2f9e63' : state === false ? '#d64530' : '#b9c4bd';
+  const label = state === true ? 'reachable' : state === false ? 'not reachable' : 'checking…';
+  return `<span class="health-dot${
+    state == null ? ' pulse' : ''
+  }" style="background:${color}" title="${label} — click to re-check"></span>`;
+}
+function healthNoteText(provider, ok) {
+  if (ok === false) {
+    const isOllama = /:11434/.test(provider.endpoint || '');
+    return `${esc(provider.name)} is <strong>not reachable</strong>${
+      isOllama
+        ? ' — start Ollama (menu-bar app or `ollama serve`), then click the dot to re-check'
+        : ' — check the endpoint in AI settings'
+    }.`;
+  }
+  if (ok === true) return `${esc(provider.name)} — live.`;
+  return `${esc(provider.name)} — checking…`;
+}
+// Fill every [data-health-for] span on the page for the given provider, then probe.
+function updateHealthBadges(provider, force) {
+  const spans = document.querySelectorAll('[data-health-for]');
+  if (!spans.length || !provider) return;
+  spans.forEach(s => {
+    if (s.dataset.healthFor === provider.id)
+      s.innerHTML = `${healthDotHtml(providerHealth[provider.id]?.ok ?? null)} ${healthNoteText(
+        provider,
+        providerHealth[provider.id]?.ok ?? null
+      )}`;
+  });
+  checkProviderHealth(provider, force).then(ok => {
+    if (ok === null) return;
+    document.querySelectorAll('[data-health-for]').forEach(s => {
+      if (s.dataset.healthFor !== provider.id) return;
+      s.innerHTML = `${healthDotHtml(ok)} ${healthNoteText(provider, ok)}`;
+      s.querySelector('.health-dot').onclick = () => updateHealthBadges(provider, true);
+    });
+  });
+}
+
 function buildChatSurface(host, isRail) {
   const provider = activeProvider();
   const missing = [
@@ -4139,7 +5608,9 @@ function buildChatSurface(host, isRail) {
               )}; add it in AI settings`
             : ' — add a provider in AI settings'
         } or use slash commands (/milestone, /decision, /question, /ticket).`
-      : `Connected to ${esc(provider.name)}.`;
+      : `<span data-health-for="${esc(provider.id)}">${healthDotHtml(null)} ${esc(
+          provider.name
+        )} — checking…</span>`;
   host.innerHTML = `${
     isRail
       ? `<div class="view-head"><div><p class="eyebrow">AGENT</p><h1>Agent chat</h1><p class="subcopy">Push milestones, decisions, and questions into this workspace. Proposals require your approval before they are saved.</p></div></div>`
@@ -4162,6 +5633,8 @@ function buildChatSurface(host, isRail) {
     }
   };
   renderChatMessages(host);
+  const p = activeProvider();
+  if (p && p.endpoint && p.apiKey) updateHealthBadges(p);
 }
 function renderChatSurfaces() {
   [
@@ -4325,7 +5798,8 @@ async function sendChat(text) {
     renderChatSurfaces();
     return;
   }
-  const thinking = { role: 'assistant', content: '…', pending: true };
+  const provider = activeProvider();
+  const thinking = { role: 'assistant', content: '', streaming: true, pending: true };
   project.chat.push(thinking);
   renderChatSurfaces();
   try {
@@ -4333,13 +5807,34 @@ async function sendChat(text) {
       { role: 'system', content: chatSystemPrompt(project) },
       ...project.chat.filter(m => !m.pending).map(m => ({ role: m.role, content: m.content })),
     ];
-    const reply = await requestAiChat(messages);
-    const { content, actions } = parseChatActions(reply);
+    let reply;
+    if (canStream(provider)) {
+      let last = 0;
+      reply = await streamChatCall(provider, messages, full => {
+        const p = splitThinking(full);
+        thinking.thinking = p.thinking;
+        thinking.thinkOpen = p.open;
+        thinking.content = p.answer; // hide the raw action-JSON fence tail until done
+        const now = Date.now();
+        if (now - last > 55) {
+          last = now;
+          paintChatStream();
+        }
+      });
+    } else {
+      thinking.streaming = false;
+      thinking.content = '…';
+      renderChatSurfaces();
+      reply = await requestAiChat(messages);
+    }
+    const split = splitThinking(reply);
+    const { content, actions } = parseChatActions(split.answer || reply);
     const idx = project.chat.indexOf(thinking);
     project.chat.splice(idx, 1, {
       role: 'assistant',
       content: content || '(no response)',
       actions,
+      ...(split.thinking ? { thinking: split.thinking } : {}),
     });
   } catch (err) {
     const idx = project.chat.indexOf(thinking);
