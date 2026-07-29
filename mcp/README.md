@@ -14,6 +14,21 @@ the full spec.
 | `discuss_decision` | Add an argument/counterpoint to a decision's debate thread (still no deciding). |
 | `flag_milestone` | Record a completed feature + session summary + optional diff range. |
 | `update_acceptance_criteria` | Tick ACs (1-based), set status, append a session note. |
+| `atlas_list_pages` | List Atlas knowledge pages as a tree outline (optionally filtered by story). |
+| `atlas_get_page` | Fetch one page in full: body, tags, linked stories, diagrams, comment thread. |
+| `atlas_create_page` | Create a knowledge page (Markdown body, nestable, linkable to stories). |
+| `atlas_update_page` | Partial update of a page; reparenting rejects cycles. |
+| `atlas_comment_page` | Add an argument/analysis to a page's discussion thread. |
+| `atlas_add_diagram` | Attach a page-owned diagram (draw.io XML, SVG, Excalidraw, image, text). |
+| `atlas_link_story` | Link/unlink stories on a page (`add` / `set` / `remove`). |
+
+### Atlas
+
+Atlas is the knowledge layer: durable design documents that outlive a ticket — domain models,
+structure decisions, discussions that settled into prose. Pages nest into a tree, own their own
+diagrams, carry a comment thread, and link many-to-many with stories. The page **body** is the
+settled position; the **thread** is the debate that produced it. `get_briefing` lists the page
+outline so an agent knows what knowledge exists before asking.
 
 ## Setup
 

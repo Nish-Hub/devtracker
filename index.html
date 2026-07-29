@@ -46,6 +46,7 @@
         <button class="nav-item" data-view="home"><span>⌂</span> Home</button>
         <button class="nav-item" data-view="map"><span>⌘</span> Workspace</button>
         <button class="nav-item" data-view="context"><span>✎</span> Context</button>
+        <button class="nav-item" data-view="atlas"><span>📖</span> Atlas</button>
         <button class="nav-item" data-view="architecture"><span>🏗</span> Diagrams</button>
         <button class="nav-item" data-view="playground"><span>▶</span> Playground</button>
         <button class="nav-item" data-view="coder"><span>⌨</span> Coder</button>
@@ -111,6 +112,7 @@
 
       <section class="list-view" id="homeView" hidden></section>
       <section class="list-view" id="contextView" hidden></section>
+      <section class="list-view" id="atlasView" hidden></section>
       <section class="list-view" id="architectureView" hidden></section>
       <section class="list-view" id="playgroundView" hidden></section>
       <section class="list-view" id="coderView" hidden></section>
@@ -170,6 +172,7 @@
       style="width: min(980px, calc(100% - 30px))"
     ></dialog>
     <dialog id="questionDialog" class="dialog"></dialog>
+    <dialog id="atlasDialog" class="dialog"></dialog>
     <div class="toast" id="toast" role="status"></div>
     <script type="module" src="js/app.js"></script>
   </body>

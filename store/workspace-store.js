@@ -199,6 +199,7 @@ function normalizeWorkspace(ws) {
     }
     p.diagrams = (Array.isArray(p.diagrams) ? p.diagrams : []).map(normalizeDiagram);
     p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
+    p.pages = repairPageTree((Array.isArray(p.pages) ? p.pages : []).map(normalizePage));
     // One-time migration: fold the legacy single architecture upload into the gallery.
     if (p.architecture.content && !p.architecture.migratedToDiagrams) {
       const legacyFormat =
@@ -407,6 +408,193 @@ function updateAcceptanceCriteria(ws, projectId, ticketId, input) {
   };
 }
 
+// ---- Atlas: knowledge pages ------------------------------------------------
+
+function getPage(ws, projectId, pageId) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  return (project.pages || []).find(pg => pg.id === pageId) || null;
+}
+
+/** True when candidateParent is the page itself or one of its descendants. */
+function wouldCycle(pages, pageId, candidateParentId) {
+  if (!candidateParentId) return false;
+  if (candidateParentId === pageId) return true;
+  let cur = candidateParentId;
+  const seen = new Set();
+  while (cur) {
+    if (cur === pageId) return true;
+    if (seen.has(cur)) return true;
+    seen.add(cur);
+    cur = (pages.find(p => p.id === cur) || {}).parentId || '';
+  }
+  return false;
+}
+
+/** Only keep story ids that actually exist, so links can't dangle. */
+function knownStoryIds(project, ids) {
+  return (Array.isArray(ids) ? ids : [])
+    .map(String)
+    .filter(id => project.tickets.some(t => t.id === id));
+}
+
+function addPage(ws, projectId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  project.pages = Array.isArray(project.pages) ? project.pages : [];
+  const parentId = input.parent_id || input.parentId || '';
+  if (parentId && !project.pages.some(pg => pg.id === parentId)) {
+    throw new Error(`Unknown parent page: ${parentId}`);
+  }
+  const now = new Date().toISOString();
+  const page = normalizePage(
+    {
+      id: nextId('PG', project.pages),
+      title: input.title,
+      parentId,
+      body: input.body || '',
+      tags: input.tags,
+      storyIds: knownStoryIds(project, input.story_ids || input.storyIds),
+      created: now,
+      updated: now,
+    },
+    project.pages.length
+  );
+  project.pages.push(page);
+  logActivity(project, 'page', `${page.id} created: ${page.title}`, page.id);
+  return page;
+}
+
+/** Partial update — only the fields present in input are touched. */
+function updatePage(ws, projectId, pageId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  const page = (project.pages || []).find(pg => pg.id === pageId);
+  if (!page) throw new Error(`Unknown page: ${pageId}`);
+  if (input.title != null) page.title = String(input.title);
+  if (input.body != null) page.body = String(input.body);
+  if (input.tags != null) page.tags = (Array.isArray(input.tags) ? input.tags : []).map(String);
+  const newParent = input.parent_id != null ? input.parent_id : input.parentId;
+  if (newParent != null) {
+    const pid = String(newParent || '');
+    if (pid && !project.pages.some(pg => pg.id === pid)) {
+      throw new Error(`Unknown parent page: ${pid}`);
+    }
+    if (wouldCycle(project.pages, pageId, pid)) {
+      throw new Error(`Cannot reparent ${pageId} under ${pid}: that would create a cycle`);
+    }
+    page.parentId = pid;
+  }
+  page.updated = new Date().toISOString();
+  logActivity(project, 'page', `${page.id} updated: ${page.title}`, page.id);
+  return page;
+}
+
+function addPageComment(ws, projectId, pageId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  const page = (project.pages || []).find(pg => pg.id === pageId);
+  if (!page) throw new Error(`Unknown page: ${pageId}`);
+  const text = String((input && input.text) || '').trim();
+  if (!text) throw new Error('Comment text is required');
+  page.comments.push(
+    normalizePageComment({
+      role: input.role === 'lead' ? 'lead' : 'agent',
+      text,
+      ts: new Date().toISOString(),
+    })
+  );
+  page.updated = new Date().toISOString();
+  logActivity(
+    project,
+    'page',
+    `${page.id} comment: ${text.slice(0, 80)}${text.length > 80 ? '…' : ''}`,
+    page.id
+  );
+  return { page_id: page.id, comments: page.comments.length };
+}
+
+/** Diagrams are page-owned: they live on the page, not in the project gallery. */
+function addPageDiagram(ws, projectId, pageId, input) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  const page = (project.pages || []).find(pg => pg.id === pageId);
+  if (!page) throw new Error(`Unknown page: ${pageId}`);
+  const diagram = normalizeDiagram(
+    {
+      id: nextId('DGM', page.diagrams),
+      name: input.name,
+      kind: input.kind,
+      format: input.format,
+      type: input.type,
+      content: input.content,
+      description: input.description,
+      updated: new Date().toISOString(),
+    },
+    page.diagrams.length
+  );
+  page.diagrams.push(diagram);
+  page.updated = new Date().toISOString();
+  logActivity(project, 'page', `${page.id} diagram added: ${diagram.name}`, page.id);
+  return diagram;
+}
+
+/** mode: 'add' (default) | 'set' | 'remove'. A story may link to many pages. */
+function linkPageStories(ws, projectId, pageId, storyIds, mode = 'add') {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  const page = (project.pages || []).find(pg => pg.id === pageId);
+  if (!page) throw new Error(`Unknown page: ${pageId}`);
+  const ids = knownStoryIds(project, storyIds);
+  if (mode === 'set') page.storyIds = ids;
+  else if (mode === 'remove') page.storyIds = page.storyIds.filter(id => !ids.includes(id));
+  else page.storyIds = Array.from(new Set([...page.storyIds, ...ids]));
+  page.updated = new Date().toISOString();
+  logActivity(
+    project,
+    'page',
+    `${page.id} linked to ${page.storyIds.join(', ') || 'nothing'}`,
+    page.id
+  );
+  return { page_id: page.id, story_ids: page.storyIds };
+}
+
+function pagesForStory(ws, projectId, storyId) {
+  const project = getProject(ws, projectId);
+  if (!project) throw new Error(`Unknown project: ${projectId}`);
+  return (project.pages || [])
+    .filter(pg => pg.storyIds.includes(storyId))
+    .map(pg => ({ id: pg.id, title: pg.title }));
+}
+
+/** Flat list with depth + path, convenient for both the UI tree and agent listings. */
+function pageOutline(project) {
+  const pages = Array.isArray(project.pages) ? project.pages : [];
+  const out = [];
+  const walk = (parentId, depth, trail) => {
+    pages
+      .filter(pg => (pg.parentId || '') === parentId)
+      .forEach(pg => {
+        const path = [...trail, pg.title];
+        out.push({
+          id: pg.id,
+          title: pg.title,
+          parentId: pg.parentId || '',
+          depth,
+          path: path.join(' / '),
+          tags: pg.tags,
+          storyIds: pg.storyIds,
+          diagrams: pg.diagrams.length,
+          comments: pg.comments.length,
+          updated: pg.updated,
+        });
+        walk(pg.id, depth + 1, path);
+      });
+  };
+  walk('', 0, []);
+  return out;
+}
+
 /** One-call grounding for agents: everything a session needs to stay aligned. */
 function buildBriefing(ws, projectId) {
   const project = getProject(ws, projectId);
@@ -463,6 +651,11 @@ function buildBriefing(ws, projectId) {
           technical_notes: nextTicket.technicalNotes || '',
         }
       : null,
+    atlas_pages: pageOutline(project).map(pg => ({
+      id: pg.id,
+      path: pg.path,
+      story_ids: pg.storyIds,
+    })),
     recent_activity: (project.activity || []).slice(-10),
   };
 }
@@ -484,4 +677,15 @@ module.exports = {
   addQuestion,
   updateAcceptanceCriteria,
   buildBriefing,
+  // Atlas
+  normalizePage,
+  repairPageTree,
+  getPage,
+  addPage,
+  updatePage,
+  addPageComment,
+  addPageDiagram,
+  linkPageStories,
+  pagesForStory,
+  pageOutline,
 };

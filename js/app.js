@@ -205,6 +205,52 @@ function normalizeJourney(j, i) {
     steps,
   };
 }
+// Atlas pages: durable knowledge documents. Tree via parentId, page-owned diagrams,
+// a comment thread, and many-to-many links to stories. Mirrors store/workspace-store.js.
+function normalizePageComment(c) {
+  c = c && typeof c === 'object' ? c : {};
+  return {
+    role: ['lead', 'ai', 'agent'].includes(c.role) ? c.role : 'agent',
+    text: c && c.text != null ? String(c.text) : '',
+    ts: c.ts || '',
+  };
+}
+function normalizePage(pg, i) {
+  pg = pg && typeof pg === 'object' ? pg : {};
+  return {
+    id: pg.id || `PG-${String(i + 1).padStart(3, '0')}`,
+    title: pg.title || `Untitled page ${i + 1}`,
+    parentId: typeof pg.parentId === 'string' ? pg.parentId : '',
+    body: typeof pg.body === 'string' ? pg.body : '',
+    tags: Array.isArray(pg.tags) ? pg.tags.map(String) : [],
+    storyIds: Array.isArray(pg.storyIds) ? pg.storyIds.map(String) : [],
+    diagrams: (Array.isArray(pg.diagrams) ? pg.diagrams : []).map(normalizeDiagram),
+    comments: (Array.isArray(pg.comments) ? pg.comments : []).map(normalizePageComment),
+    created: pg.created || '',
+    updated: pg.updated || '',
+  };
+}
+/** Drop unresolvable parent links and break cycles so tree walks can never loop. */
+function repairPageTree(pages) {
+  const ids = new Set(pages.map(pg => pg.id));
+  pages.forEach(pg => {
+    if (pg.parentId && !ids.has(pg.parentId)) pg.parentId = '';
+  });
+  pages.forEach(pg => {
+    const seen = new Set([pg.id]);
+    let cur = pg.parentId;
+    while (cur) {
+      if (seen.has(cur)) {
+        pg.parentId = '';
+        break;
+      }
+      seen.add(cur);
+      cur = (pages.find(x => x.id === cur) || {}).parentId || '';
+    }
+  });
+  return pages;
+}
+
 function normalizeWorkspace(ws) {
   ws.prompts = (Array.isArray(ws.prompts) ? ws.prompts : [])
     .filter(pr => pr && (pr.text || pr.name))
@@ -232,6 +278,7 @@ function normalizeWorkspace(ws) {
       }));
     p.diagrams = (Array.isArray(p.diagrams) ? p.diagrams : []).map(normalizeDiagram);
     p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
+    p.pages = repairPageTree((Array.isArray(p.pages) ? p.pages : []).map(normalizePage));
     if (p.architecture?.content && !p.architecture.migratedToDiagrams) {
       const fmt =
         p.architecture.type === 'svg'
@@ -476,6 +523,7 @@ function renderAll() {
   renderNextUp();
   renderTicket();
   renderContext();
+  renderAtlas();
   renderArchitecture();
   renderGit();
   renderMilestones();
@@ -2061,6 +2109,517 @@ function openDecisionForm(existing) {
   };
   d.showModal();
 }
+// ---- Atlas: knowledge pages -----------------------------------------------
+let atlasSelectedPageId = '';
+let atlasEditing = false;
+
+function atlasPageById(project, id) {
+  return (project.pages || []).find(pg => pg.id === id) || null;
+}
+/** Flat depth-first list with depth + breadcrumb path, for the sidebar tree. */
+function atlasOutline(project) {
+  const pages = project.pages || [];
+  const out = [];
+  const walk = (parentId, depth, trail) => {
+    pages
+      .filter(pg => (pg.parentId || '') === parentId)
+      .forEach(pg => {
+        const path = [...trail, pg.title];
+        out.push({ page: pg, depth, path });
+        walk(pg.id, depth + 1, path);
+      });
+  };
+  walk('', 0, []);
+  return out;
+}
+function nextPageId(project) {
+  let max = 0;
+  (project.pages || []).forEach(pg => {
+    const m = String(pg.id).match(/^PG-(\d+)$/);
+    if (m) max = Math.max(max, Number(m[1]));
+  });
+  return `PG-${String(max + 1).padStart(3, '0')}`;
+}
+/** True if candidate is the page itself or one of its descendants. */
+function atlasWouldCycle(pages, pageId, candidateParentId) {
+  if (!candidateParentId) return false;
+  let cur = candidateParentId;
+  const seen = new Set();
+  while (cur) {
+    if (cur === pageId || seen.has(cur)) return true;
+    seen.add(cur);
+    cur = (pages.find(p => p.id === cur) || {}).parentId || '';
+  }
+  return false;
+}
+
+// Escape-first Markdown subset. Page bodies can come from the agent over MCP, so
+// nothing is trusted: we escape everything, then re-introduce a fixed set of tags.
+function mdToHtml(src) {
+  const lines = String(src || '').split('\n');
+  let html = '';
+  let inCode = false;
+  let listType = '';
+  const closeList = () => {
+    if (listType) {
+      html += `</${listType}>`;
+      listType = '';
+    }
+  };
+  const inline = s =>
+    esc(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(
+        /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+      );
+  lines.forEach(raw => {
+    const line = raw.replace(/\s+$/, '');
+    if (/^```/.test(line)) {
+      closeList();
+      html += inCode ? '</code></pre>' : '<pre class="atlas-pre"><code>';
+      inCode = !inCode;
+      return;
+    }
+    if (inCode) {
+      html += esc(raw) + '\n';
+      return;
+    }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) {
+      closeList();
+      const lvl = Math.min(6, h[1].length + 1);
+      html += `<h${lvl}>${inline(h[2])}</h${lvl}>`;
+      return;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      if (listType !== 'ul') {
+        closeList();
+        html += '<ul>';
+        listType = 'ul';
+      }
+      html += `<li>${inline(line.replace(/^\s*[-*]\s+/, ''))}</li>`;
+      return;
+    }
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      if (listType !== 'ol') {
+        closeList();
+        html += '<ol>';
+        listType = 'ol';
+      }
+      html += `<li>${inline(line.replace(/^\s*\d+[.)]\s+/, ''))}</li>`;
+      return;
+    }
+    if (/^\s*(---|___|\*\*\*)\s*$/.test(line)) {
+      closeList();
+      html += '<hr>';
+      return;
+    }
+    if (!line.trim()) {
+      closeList();
+      return;
+    }
+    closeList();
+    html += `<p>${inline(line)}</p>`;
+  });
+  if (inCode) html += '</code></pre>';
+  closeList();
+  return html || '<p class="subcopy">This page is empty. Click Edit to start writing.</p>';
+}
+
+function atlasTouch(page) {
+  page.updated = new Date().toISOString();
+}
+
+function renderAtlas() {
+  const project = activeProject();
+  const el = $('#atlasView');
+  if (!el) return;
+  const pages = project.pages || [];
+  if (!atlasPageById(project, atlasSelectedPageId))
+    atlasSelectedPageId = pages[0] ? pages[0].id : '';
+  const outline = atlasOutline(project);
+  const page = atlasPageById(project, atlasSelectedPageId);
+
+  const tree = outline.length
+    ? outline
+        .map(
+          ({ page: pg, depth }) =>
+            `<button class="atlas-tree-item${
+              pg.id === atlasSelectedPageId ? ' active' : ''
+            }" data-atlas-open="${esc(pg.id)}" style="padding-left:${
+              10 + depth * 14
+            }px" title="${esc(pg.id)}">${
+              depth ? '<span class="atlas-twig">└</span>' : ''
+            }<span class="atlas-tree-title">${esc(pg.title)}</span>${
+              pg.storyIds.length ? `<span class="atlas-chip">${pg.storyIds.length}</span>` : ''
+            }</button>`
+        )
+        .join('')
+    : '<p class="subcopy" style="padding:10px">No pages yet.</p>';
+
+  el.innerHTML = `<div class="view-head"><div><p class="eyebrow">ATLAS</p><h1>Knowledge pages</h1><p class="subcopy">Durable design knowledge — domain models, structure decisions, discussions that settled into prose. Pages nest, carry their own diagrams, and link to the stories they inform.</p></div><button class="button primary" id="atlasNewPage">+ Page</button></div>
+  <div class="atlas-layout">
+    <aside class="atlas-tree">${tree}</aside>
+    <section class="atlas-page">${
+      page
+        ? `<header class="atlas-page-head">
+            <p class="list-meta">${esc(
+              (outline.find(o => o.page.id === page.id) || { path: [page.title] }).path.join(' / ')
+            )} · ${esc(page.id)}${
+            page.updated ? ` · updated ${esc(String(page.updated).slice(0, 10))}` : ''
+          }</p>
+            <h2>${esc(page.title)}</h2>
+            <div class="atlas-actions">
+              <button class="button" id="atlasEditToggle">${
+                atlasEditing ? 'Cancel' : '✎ Edit'
+              }</button>
+              <button class="button" id="atlasAddChild">+ Subpage</button>
+              <button class="button" id="atlasAddDiagram">+ Diagram</button>
+              <button class="button" id="atlasLinkStory">⛓ Link story</button>
+              <button class="button" id="atlasDeletePage">Delete</button>
+            </div>
+            ${
+              page.tags.length
+                ? `<p class="atlas-tags">${page.tags
+                    .map(t => `<span class="atlas-chip">${esc(t)}</span>`)
+                    .join('')}</p>`
+                : ''
+            }
+            ${
+              page.storyIds.length
+                ? `<p class="atlas-tags">${page.storyIds
+                    .map(id => {
+                      const t = project.tickets.find(x => x.id === id);
+                      return `<button class="atlas-story" data-atlas-story="${esc(id)}">${esc(id)}${
+                        t ? ` · ${esc(t.title)}` : ''
+                      }</button>`;
+                    })
+                    .join('')}</p>`
+                : ''
+            }
+          </header>
+          ${
+            atlasEditing
+              ? `<form id="atlasEditForm" class="atlas-edit">
+                   <div class="field"><label>Title</label><input name="title" value="${esc(
+                     page.title
+                   )}" required></div>
+                   <div class="field"><label>Tags (comma separated)</label><input name="tags" value="${esc(
+                     page.tags.join(', ')
+                   )}"></div>
+                   <div class="field"><label>Parent page</label><select name="parentId"><option value="">— top level —</option>${outline
+                     .filter(
+                       o =>
+                         o.page.id !== page.id &&
+                         !atlasWouldCycle(project.pages, page.id, o.page.id)
+                     )
+                     .map(
+                       ({ page: pg, depth }) =>
+                         `<option value="${esc(pg.id)}"${
+                           pg.id === page.parentId ? ' selected' : ''
+                         }>${'— '.repeat(depth)}${esc(pg.title)}</option>`
+                     )
+                     .join('')}</select></div>
+                   <div class="field"><label>Body (Markdown)</label><textarea name="body" rows="18">${esc(
+                     page.body
+                   )}</textarea></div>
+                   <div class="dialog-actions"><button class="button" type="button" id="atlasEditCancel">Cancel</button><button class="button primary">Save page</button></div>
+                 </form>`
+              : `<article class="atlas-body">${mdToHtml(page.body)}</article>`
+          }
+          <h3 class="atlas-sub">Diagrams</h3>
+          ${
+            page.diagrams.length
+              ? `<div class="diagram-grid">${page.diagrams
+                  .map(
+                    g => `<div class="diagram-card"><strong>${esc(g.name)}</strong>
+                      <p class="list-meta">${esc(g.kind)} · ${esc(g.format)}</p>
+                      ${diagramPreviewHtml(g)}
+                      <p style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+                        ${
+                          g.format === 'drawio'
+                            ? `<button class="button" data-atlas-dgm-drawio="${esc(
+                                g.id
+                              )}">Open in diagrams.net</button>`
+                            : ''
+                        }
+                        <button class="button" data-atlas-dgm-dl="${esc(g.id)}">Download</button>
+                        <button class="button" data-atlas-dgm-del="${esc(g.id)}">Remove</button>
+                      </p></div>`
+                  )
+                  .join('')}</div>`
+              : '<p class="subcopy">No diagrams on this page. Use “+ Diagram” to upload an .excalidraw, .drawio, .svg or image — or create one in diagrams.net.</p>'
+          }
+          <h3 class="atlas-sub">Discussion</h3>
+          <div class="atlas-thread">${
+            page.comments.length
+              ? page.comments
+                  .map(
+                    c =>
+                      `<div class="atlas-comment ${esc(c.role)}"><p class="list-meta">${
+                        c.role === 'lead' ? 'Tech Lead' : 'Agent'
+                      }${c.ts ? ` · ${esc(String(c.ts).slice(0, 10))}` : ''}</p><p>${esc(
+                        c.text
+                      )}</p></div>`
+                  )
+                  .join('')
+              : '<p class="subcopy">No discussion yet.</p>'
+          }</div>
+          <form id="atlasCommentForm" class="atlas-comment-form">
+            <textarea name="text" rows="3" placeholder="Add to the discussion…" required></textarea>
+            <button class="button primary">Comment</button>
+          </form>`
+        : '<p class="subcopy" style="padding:20px">Select a page, or create the first one with “+ Page”.</p>'
+    }</section>
+  </div>
+  <input type="file" id="atlasDiagramInput" accept=".png,.jpg,.jpeg,.gif,.webp,.svg,.drawio,.xml,.excalidraw,.json" style="display:none">`;
+
+  // --- wiring ---
+  $('#atlasNewPage').onclick = () => openAtlasPageForm('');
+  el.querySelectorAll('[data-atlas-open]').forEach(
+    b =>
+      (b.onclick = () => {
+        atlasSelectedPageId = b.dataset.atlasOpen;
+        atlasEditing = false;
+        renderAtlas();
+      })
+  );
+  if (!page) return;
+
+  $('#atlasEditToggle').onclick = () => {
+    atlasEditing = !atlasEditing;
+    renderAtlas();
+  };
+  $('#atlasAddChild').onclick = () => openAtlasPageForm(page.id);
+  $('#atlasDeletePage').onclick = () => {
+    const kids = (project.pages || []).filter(pg => pg.parentId === page.id);
+    const msg = kids.length
+      ? `Delete “${page.title}”? Its ${kids.length} subpage(s) will move up to its parent.`
+      : `Delete “${page.title}”?`;
+    if (!confirm(msg)) return;
+    kids.forEach(k => (k.parentId = page.parentId || ''));
+    project.pages = project.pages.filter(pg => pg.id !== page.id);
+    logActivity(project, 'page', `${page.id} deleted: ${page.title}`, page.id);
+    atlasSelectedPageId = '';
+    atlasEditing = false;
+    save();
+    renderAll();
+    toast('Page deleted.');
+  };
+  el.querySelectorAll('[data-atlas-story]').forEach(
+    b =>
+      (b.onclick = () => {
+        project.selectedTicketId = b.dataset.atlasStory;
+        save();
+        renderAll();
+        setView('map');
+      })
+  );
+  $('#atlasLinkStory').onclick = () => openAtlasLinkForm(page.id);
+
+  if (atlasEditing) {
+    $('#atlasEditCancel').onclick = () => {
+      atlasEditing = false;
+      renderAtlas();
+    };
+    $('#atlasEditForm').onsubmit = e => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      page.title = String(f.get('title') || '').trim() || page.title;
+      page.body = String(f.get('body') || '');
+      page.tags = String(f.get('tags') || '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      const wanted = String(f.get('parentId') || '');
+      if (wanted !== page.parentId) {
+        if (atlasWouldCycle(project.pages, page.id, wanted)) {
+          toast('That move would nest the page inside itself.');
+          return;
+        }
+        page.parentId = wanted;
+      }
+      atlasTouch(page);
+      logActivity(project, 'page', `${page.id} updated: ${page.title}`, page.id);
+      atlasEditing = false;
+      save();
+      renderAll();
+      toast('Page saved.');
+    };
+  }
+
+  $('#atlasCommentForm').onsubmit = e => {
+    e.preventDefault();
+    const text = String(new FormData(e.target).get('text') || '').trim();
+    if (!text) return;
+    page.comments.push({ role: 'lead', text, ts: new Date().toISOString() });
+    atlasTouch(page);
+    logActivity(project, 'page', `${page.id} comment: ${text.slice(0, 60)}`, page.id);
+    save();
+    renderAll();
+  };
+
+  // Diagrams (page-owned): reuse the existing upload/preview/draw.io plumbing.
+  $('#atlasAddDiagram').onclick = () => $('#atlasDiagramInput').click();
+  $('#atlasDiagramInput').onchange = ev => {
+    const file = ev.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    const isImage = /^image\/(png|jpe?g|gif|webp)$/i.test(file.type);
+    reader.onload = () => {
+      const content = String(reader.result || '');
+      const format = isImage ? 'image' : detectDiagramFormat(file.name, content);
+      page.diagrams.push(
+        normalizeDiagram(
+          {
+            id: `DGM-${String(page.diagrams.length + 1).padStart(3, '0')}`,
+            name: file.name.replace(/\.[^.]+$/, ''),
+            kind: 'architecture',
+            format,
+            type: file.type,
+            content,
+            updated: new Date().toISOString(),
+          },
+          page.diagrams.length
+        )
+      );
+      atlasTouch(page);
+      logActivity(project, 'page', `${page.id} diagram added: ${file.name}`, page.id);
+      save();
+      renderAll();
+      toast('Diagram added to page.');
+    };
+    if (isImage) reader.readAsDataURL(file);
+    else reader.readAsText(file);
+    ev.target.value = '';
+  };
+  el.querySelectorAll('[data-atlas-dgm-drawio]').forEach(
+    b =>
+      (b.onclick = () => {
+        const g = page.diagrams.find(d => d.id === b.dataset.atlasDgmDrawio);
+        if (g) openDiagramInDrawio(g);
+      })
+  );
+  el.querySelectorAll('[data-atlas-dgm-dl]').forEach(
+    b =>
+      (b.onclick = () => {
+        const g = page.diagrams.find(d => d.id === b.dataset.atlasDgmDl);
+        if (g) downloadDiagram(g);
+      })
+  );
+  el.querySelectorAll('[data-atlas-dgm-del]').forEach(
+    b =>
+      (b.onclick = () => {
+        page.diagrams = page.diagrams.filter(d => d.id !== b.dataset.atlasDgmDel);
+        atlasTouch(page);
+        save();
+        renderAll();
+      })
+  );
+}
+
+function openAtlasPageForm(parentId) {
+  const project = activeProject();
+  const d = $('#atlasDialog');
+  const parents = atlasOutline(project);
+  d.innerHTML = `<form class="dialog-body"><h2>New Atlas page</h2>
+    <div class="field"><label>Title</label><input name="title" required placeholder="e.g. Domain structure — CodeUnit &amp; CodeRelationship"></div>
+    <div class="field"><label>Parent page</label><select name="parentId"><option value="">— top level —</option>${parents
+      .map(
+        ({ page: pg, depth }) =>
+          `<option value="${esc(pg.id)}"${pg.id === parentId ? ' selected' : ''}>${'— '.repeat(
+            depth
+          )}${esc(pg.title)}</option>`
+      )
+      .join('')}</select></div>
+    <div class="field"><label>Tags (comma separated)</label><input name="tags" placeholder="domain, persistence"></div>
+    <div class="field"><label>Link stories (comma separated ids)</label><input name="storyIds" placeholder="CTXR-11, CTXR-4"></div>
+    <div class="field"><label>Body (Markdown)</label><textarea name="body" rows="8"></textarea></div>
+    <div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary">Create page</button></div></form>`;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('form').onsubmit = e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const now = new Date().toISOString();
+    const known = String(f.get('storyIds') || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(id => project.tickets.some(t => t.id === id));
+    const page = normalizePage(
+      {
+        id: nextPageId(project),
+        title: String(f.get('title') || '').trim(),
+        parentId: String(f.get('parentId') || ''),
+        body: String(f.get('body') || ''),
+        tags: String(f.get('tags') || '')
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean),
+        storyIds: known,
+        created: now,
+        updated: now,
+      },
+      (project.pages || []).length
+    );
+    project.pages = Array.isArray(project.pages) ? project.pages : [];
+    project.pages.push(page);
+    logActivity(project, 'page', `${page.id} created: ${page.title}`, page.id);
+    atlasSelectedPageId = page.id;
+    atlasEditing = false;
+    d.close();
+    save();
+    renderAll();
+    toast('Page created.');
+  };
+  d.showModal();
+}
+
+function openAtlasLinkForm(pageId) {
+  const project = activeProject();
+  const page = atlasPageById(project, pageId);
+  if (!page) return;
+  const d = $('#atlasDialog');
+  d.innerHTML = `<form class="dialog-body"><h2>Link stories to “${esc(page.title)}”</h2>
+    <p class="subcopy">One page can inform many stories, and a story can have many pages.</p>
+    <div class="field"><label>Stories</label><div class="atlas-link-list">${
+      project.tickets.length
+        ? project.tickets
+            .map(
+              t =>
+                `<label class="atlas-link-row"><input type="checkbox" name="story" value="${esc(
+                  t.id
+                )}"${page.storyIds.includes(t.id) ? ' checked' : ''}> <span>${esc(t.id)} · ${esc(
+                  t.title
+                )}</span></label>`
+            )
+            .join('')
+        : '<p class="subcopy">No stories in this project yet.</p>'
+    }</div></div>
+    <div class="dialog-actions"><button class="button" type="button" data-close>Cancel</button><button class="button primary">Save links</button></div></form>`;
+  d.querySelector('[data-close]').onclick = () => d.close();
+  d.querySelector('form').onsubmit = e => {
+    e.preventDefault();
+    page.storyIds = Array.from(e.target.querySelectorAll('input[name="story"]:checked')).map(
+      i => i.value
+    );
+    atlasTouch(page);
+    logActivity(
+      project,
+      'page',
+      `${page.id} linked to ${page.storyIds.join(', ') || 'nothing'}`,
+      page.id
+    );
+    d.close();
+    save();
+    renderAll();
+    toast('Links updated.');
+  };
+  d.showModal();
+}
+
 function renderQuestions() {
   const project = activeProject();
   const el = $('#questionsView');
@@ -4776,6 +5335,7 @@ function setView(view) {
     'home',
     'map',
     'context',
+    'atlas',
     'architecture',
     'playground',
     'coder',

@@ -145,6 +145,142 @@ const TOOLS = [
       required: ['project_id', 'ticket_id'],
     },
   },
+  {
+    name: 'atlas_list_pages',
+    description:
+      'List the Atlas knowledge pages for a project as a tree outline (id, full path, ' +
+      'linked stories, counts). Atlas is where durable design knowledge lives — domain ' +
+      'models, structure decisions, discussion that settled into prose. Call this when you ' +
+      'need background that is bigger than a ticket description, or before writing a new page ' +
+      'so you extend the right one instead of duplicating it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string', description: 'Project id, e.g. "CTXR".' },
+        story_id: {
+          type: 'string',
+          description: 'Optional: only pages linked to this story/ticket id.',
+        },
+      },
+      required: ['project_id'],
+    },
+  },
+  {
+    name: 'atlas_get_page',
+    description:
+      'Fetch one Atlas page in full: body, tags, linked stories, page-owned diagrams, and the ' +
+      'comment thread. Call it when you start work that a page covers, to load the reasoning ' +
+      'behind the current design rather than re-deriving it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        page_id: { type: 'string', description: 'Page id, e.g. "PG-001".' },
+      },
+      required: ['project_id', 'page_id'],
+    },
+  },
+  {
+    name: 'atlas_create_page',
+    description:
+      'Create a new Atlas page to record durable knowledge — a domain model, a structural ' +
+      'decision write-up, a distilled discussion. Use Markdown in the body. Nest it under an ' +
+      'existing page with parent_id, and link it to the stories it informs with story_ids. ' +
+      'Prefer updating an existing page over creating a near-duplicate.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string', description: 'Page content as Markdown.' },
+        parent_id: { type: 'string', description: 'Parent page id; omit for a top-level page.' },
+        tags: { type: 'array', items: { type: 'string' } },
+        story_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ticket ids this page informs, e.g. ["CTXR-11"].',
+        },
+      },
+      required: ['project_id', 'title'],
+    },
+  },
+  {
+    name: 'atlas_update_page',
+    description:
+      'Update an Atlas page. Only the fields you pass are changed, so send just what moved on. ' +
+      'Use this to fold a concluded discussion into the page body — the body is the settled ' +
+      'position, the comment thread is the debate that got there. parent_id reparents the page ' +
+      '(cycles are rejected).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        page_id: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string', description: 'Full replacement body, as Markdown.' },
+        parent_id: { type: 'string', description: 'New parent page id; "" moves it to the root.' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['project_id', 'page_id'],
+    },
+  },
+  {
+    name: 'atlas_comment_page',
+    description:
+      'Add a comment to an Atlas page thread: an argument, a question, an analysis for the Tech ' +
+      'Lead to weigh. Use this for in-progress discussion; once something is settled, fold it ' +
+      'into the page body with atlas_update_page.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        page_id: { type: 'string' },
+        comment: { type: 'string', description: 'Your point. Keep it under ~150 words.' },
+      },
+      required: ['project_id', 'page_id', 'comment'],
+    },
+  },
+  {
+    name: 'atlas_add_diagram',
+    description:
+      'Attach a diagram to an Atlas page. Diagrams are page-owned. For an editable draw.io ' +
+      'diagram pass format "drawio" with raw mxfile/mxGraphModel XML as content — the app can ' +
+      'then open it in diagrams.net. "svg", "excalidraw", "image" (data URL) and "text" are also ' +
+      'accepted. Prefer a diagram over prose when describing structure or flow.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        page_id: { type: 'string' },
+        name: { type: 'string' },
+        format: { type: 'string', enum: ['drawio', 'svg', 'excalidraw', 'image', 'text'] },
+        kind: { type: 'string', enum: ['architecture', 'dataflow', 'sequence', 'erd', 'other'] },
+        content: {
+          type: 'string',
+          description: 'Diagram source (e.g. draw.io XML or SVG markup).',
+        },
+        description: { type: 'string' },
+      },
+      required: ['project_id', 'page_id', 'name', 'content'],
+    },
+  },
+  {
+    name: 'atlas_link_story',
+    description:
+      'Link or unlink stories on an Atlas page. One story can link to many pages and one page ' +
+      'can inform many stories. Use it so a ticket carries its background knowledge with it. ' +
+      'mode: "add" (default), "set" (replace the list), or "remove".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'string' },
+        page_id: { type: 'string' },
+        story_ids: { type: 'array', items: { type: 'string' } },
+        mode: { type: 'string', enum: ['add', 'set', 'remove'] },
+      },
+      required: ['project_id', 'page_id', 'story_ids'],
+    },
+  },
 ];
 
 /** Pure tool dispatch — testable without any MCP transport. */
@@ -192,6 +328,49 @@ function handleCall(name, args, storePath = DEFAULT_STORE_PATH) {
     case 'update_acceptance_criteria': {
       return store.withStore(storePath, ws =>
         store.updateAcceptanceCriteria(ws, args.project_id, args.ticket_id, args)
+      );
+    }
+    case 'atlas_list_pages': {
+      const ws = store.loadWorkspace(storePath);
+      const project = store.getProject(ws, args.project_id);
+      if (!project) throw new Error(`Unknown project: ${args.project_id}`);
+      const pages = store.pageOutline(project);
+      return {
+        pages: args.story_id ? pages.filter(p => p.storyIds.includes(args.story_id)) : pages,
+      };
+    }
+    case 'atlas_get_page': {
+      const page = store.getPage(store.loadWorkspace(storePath), args.project_id, args.page_id);
+      if (!page) throw new Error(`Unknown page: ${args.page_id}`);
+      return page;
+    }
+    case 'atlas_create_page': {
+      const pg = store.withStore(storePath, ws => store.addPage(ws, args.project_id, args));
+      return { id: pg.id, title: pg.title, parent_id: pg.parentId, story_ids: pg.storyIds };
+    }
+    case 'atlas_update_page': {
+      const pg = store.withStore(storePath, ws =>
+        store.updatePage(ws, args.project_id, args.page_id, args)
+      );
+      return { id: pg.id, title: pg.title, parent_id: pg.parentId, updated: pg.updated };
+    }
+    case 'atlas_comment_page': {
+      return store.withStore(storePath, ws =>
+        store.addPageComment(ws, args.project_id, args.page_id, {
+          role: 'agent',
+          text: args.comment,
+        })
+      );
+    }
+    case 'atlas_add_diagram': {
+      const d = store.withStore(storePath, ws =>
+        store.addPageDiagram(ws, args.project_id, args.page_id, args)
+      );
+      return { id: d.id, name: d.name, format: d.format };
+    }
+    case 'atlas_link_story': {
+      return store.withStore(storePath, ws =>
+        store.linkPageStories(ws, args.project_id, args.page_id, args.story_ids, args.mode || 'add')
       );
     }
     default:

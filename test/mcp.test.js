@@ -57,8 +57,15 @@ beforeEach(() => {
   });
 });
 
-test('exposes exactly the six documented tools', () => {
+test('exposes exactly the documented tools', () => {
   expect(TOOLS.map(t => t.name).sort()).toEqual([
+    'atlas_add_diagram',
+    'atlas_comment_page',
+    'atlas_create_page',
+    'atlas_get_page',
+    'atlas_link_story',
+    'atlas_list_pages',
+    'atlas_update_page',
     'capture_decision',
     'discuss_decision',
     'flag_milestone',
@@ -66,6 +73,84 @@ test('exposes exactly the six documented tools', () => {
     'query_context_db',
     'update_acceptance_criteria',
   ]);
+});
+
+test('every tool has a non-trivial description and an object input schema', () => {
+  TOOLS.forEach(t => {
+    expect(t.description.length).toBeGreaterThan(40);
+    expect(t.inputSchema.type).toBe('object');
+  });
+});
+
+describe('atlas pages', () => {
+  test('creates a nested tree, rejects cycles, and links stories', () => {
+    const parent = handleCall(
+      'atlas_create_page',
+      { project_id: 'CTXR', title: 'Domain structure', body: '# Model' },
+      storePath
+    );
+    const child = handleCall(
+      'atlas_create_page',
+      { project_id: 'CTXR', title: 'Ports', parent_id: parent.id },
+      storePath
+    );
+    const outline = handleCall('atlas_list_pages', { project_id: 'CTXR' }, storePath).pages;
+    expect(outline.find(p => p.id === child.id).path).toBe('Domain structure / Ports');
+    expect(outline.find(p => p.id === child.id).depth).toBe(1);
+
+    expect(() =>
+      handleCall(
+        'atlas_update_page',
+        { project_id: 'CTXR', page_id: parent.id, parent_id: child.id },
+        storePath
+      )
+    ).toThrow(/cycle/i);
+
+    expect(() =>
+      handleCall(
+        'atlas_create_page',
+        { project_id: 'CTXR', title: 'Orphan', parent_id: 'PG-999' },
+        storePath
+      )
+    ).toThrow(/parent/i);
+  });
+
+  test('comments, page-owned diagrams, and story links persist', () => {
+    const pg = handleCall('atlas_create_page', { project_id: 'CTXR', title: 'Notes' }, storePath);
+    handleCall(
+      'atlas_comment_page',
+      { project_id: 'CTXR', page_id: pg.id, comment: 'an argument' },
+      storePath
+    );
+    handleCall(
+      'atlas_add_diagram',
+      {
+        project_id: 'CTXR',
+        page_id: pg.id,
+        name: 'Flow',
+        format: 'drawio',
+        content: '<mxfile/>',
+      },
+      storePath
+    );
+    handleCall(
+      'atlas_link_story',
+      { project_id: 'CTXR', page_id: pg.id, story_ids: ['CTXR-5', 'NOPE-1'] },
+      storePath
+    );
+    const full = handleCall('atlas_get_page', { project_id: 'CTXR', page_id: pg.id }, storePath);
+    expect(full.comments).toHaveLength(1);
+    expect(full.comments[0].role).toBe('agent');
+    expect(full.diagrams[0].format).toBe('drawio');
+    // Unknown story ids are filtered out so links can never dangle.
+    expect(full.storyIds).toEqual(['CTXR-5']);
+    const filtered = handleCall(
+      'atlas_list_pages',
+      { project_id: 'CTXR', story_id: 'CTXR-5' },
+      storePath
+    ).pages;
+    expect(filtered.map(p => p.id)).toContain(pg.id);
+  });
 });
 
 test('get_briefing returns constraints, decisions, next ticket, and rules', () => {
