@@ -115,6 +115,17 @@ describe('atlas pages', () => {
     ).toThrow(/parent/i);
   });
 
+  test('project_id "*" lists pages across projects with qualified paths', () => {
+    handleCall('atlas_create_page', { project_id: 'CTXR', title: 'Scoped' }, storePath);
+    const all = handleCall('atlas_list_pages', { project_id: '*' }, storePath).pages;
+    expect(all.length).toBeGreaterThan(0);
+    all.forEach(p => {
+      expect(p.projectId).toBeTruthy();
+      expect(p.path.startsWith(`${p.projectId} / `)).toBe(true);
+    });
+    expect(() => handleCall('atlas_list_pages', { project_id: 'NOPE' }, storePath)).toThrow();
+  });
+
   test('comments, page-owned diagrams, and story links persist', () => {
     const pg = handleCall('atlas_create_page', { project_id: 'CTXR', title: 'Notes' }, storePath);
     handleCall(

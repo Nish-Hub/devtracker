@@ -156,7 +156,10 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        project_id: { type: 'string', description: 'Project id, e.g. "CTXR".' },
+        project_id: {
+          type: 'string',
+          description: 'Project id, e.g. "CTXR". Use "*" to list pages across every project.',
+        },
         story_id: {
           type: 'string',
           description: 'Optional: only pages linked to this story/ticket id.',
@@ -332,9 +335,20 @@ function handleCall(name, args, storePath = DEFAULT_STORE_PATH) {
     }
     case 'atlas_list_pages': {
       const ws = store.loadWorkspace(storePath);
-      const project = store.getProject(ws, args.project_id);
-      if (!project) throw new Error(`Unknown project: ${args.project_id}`);
-      const pages = store.pageOutline(project);
+      let pages;
+      if (args.project_id === '*') {
+        // Cross-project listing: qualify each path with its project so ids stay unambiguous.
+        pages = [];
+        (ws.projects || []).forEach(p =>
+          store
+            .pageOutline(p)
+            .forEach(pg => pages.push({ ...pg, projectId: p.id, path: `${p.id} / ${pg.path}` }))
+        );
+      } else {
+        const project = store.getProject(ws, args.project_id);
+        if (!project) throw new Error(`Unknown project: ${args.project_id}`);
+        pages = store.pageOutline(project).map(pg => ({ ...pg, projectId: project.id }));
+      }
       return {
         pages: args.story_id ? pages.filter(p => p.storyIds.includes(args.story_id)) : pages,
       };
