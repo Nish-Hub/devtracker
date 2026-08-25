@@ -180,6 +180,22 @@ function repairPageTree(pages) {
   return pages;
 }
 
+// A "problem statement" is a project-level framing document (refined problem +
+// solution + top design concerns) with its own discussion thread. It lives in its
+// own nav section, deliberately outside the Atlas page tree.
+function normalizeProblem(ps) {
+  ps = ps && typeof ps === 'object' ? ps : {};
+  return {
+    body: typeof ps.body === 'string' ? ps.body : '',
+    updated: ps.updated || '',
+    comments: (Array.isArray(ps.comments) ? ps.comments : []).map(c => ({
+      role: c && ['lead', 'reviewer', 'agent'].includes(c.role) ? c.role : 'agent',
+      text: c && c.text != null ? String(c.text) : '',
+      ts: (c && c.ts) || '',
+    })),
+  };
+}
+
 function normalizeWorkspace(ws) {
   ws = ws && typeof ws === 'object' ? ws : emptyWorkspace();
   if (!Array.isArray(ws.projects)) ws.projects = [];
@@ -224,6 +240,7 @@ function normalizeWorkspace(ws) {
     p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
     p.pages = repairPageTree((Array.isArray(p.pages) ? p.pages : []).map(normalizePage));
     p.notes = (Array.isArray(p.notes) ? p.notes : []).map(normalizeNote);
+    p.problemStatement = normalizeProblem(p.problemStatement);
     // One-time migration: fold the legacy single architecture upload into the gallery.
     if (p.architecture.content && !p.architecture.migratedToDiagrams) {
       const legacyFormat =

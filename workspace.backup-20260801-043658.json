@@ -1,0 +1,1691 @@
+{
+  "version": 3,
+  "activeProjectId": "CTXR",
+  "projects": [
+    {
+      "id": "CTXR",
+      "name": "ContextRAG MVP",
+      "description": "RAG-based context retrieval server for AI coding agents: indexes code, issues, and docs into a vector store and exposes semantic search over MCP. Spring Boot + Python MCP + MongoDB + Jina AI. Phase 1 = single-service PR-review context (Shape A).",
+      "constraints": [
+        {
+          "id": "CON-001",
+          "text": "Java 21 LTS + Spring Boot 3.4.x — match the office runtime, not newest features.",
+          "active": true
+        },
+        {
+          "id": "CON-002",
+          "text": "MongoDB (docs + vectors) and Jina AI embeddings — portable local -> dev -> prod.",
+          "active": true
+        },
+        {
+          "id": "CON-003",
+          "text": "Adapters from day one: CodeSource / TicketSource / DocSource are interfaces; the office build swaps GitHub/Markdown for Bitbucket/JIRA/Confluence without touching services.",
+          "active": true
+        },
+        {
+          "id": "CON-004",
+          "text": "Phase 1 = Shape A (single-service reviewer). Phase 2 = Shape B (cross-service intelligence).",
+          "active": true
+        },
+        {
+          "id": "CON-005",
+          "text": "Persistence must be database-independent: domain/services depend on storage ports (DocumentStore/VectorStore); concrete stores (MongoDB first) are adapters behind them. Infra/liveness checks may stay store-specific.",
+          "active": true
+        },
+        {
+          "id": "CON-006",
+          "text": "Observability by default: every new service/component exposes metrics via actuator/Prometheus from the first commit — not added later.",
+          "active": true
+        },
+        {
+          "id": "CON-007",
+          "text": "No blocking I/O on request threads: DB/network probes and other blocking calls run on a bounded executor with a timeout, never inline on the servlet thread.",
+          "active": true
+        },
+        {
+          "id": "CON-008",
+          "text": "Optional features must be config-toggleable: gate behind an enable property with tunables (pool size, timeout), never hardcoded always-on.",
+          "active": true
+        },
+        {
+          "id": "CON-009",
+          "text": "Structured logging: every catch/timeout path logs the exception; no silent failures.",
+          "active": true
+        }
+      ],
+      "decisions": [
+        {
+          "id": "ADR-001",
+          "date": "2026-07-28",
+          "title": "Java 21 LTS (not 25/26)",
+          "context": "",
+          "reversibility": "two-way",
+          "options": [],
+          "choice": "Java 21 LTS",
+          "rationale": "Matches the office environment; LTS support to 2028+; virtual threads GA. JDK version is irrelevant to the AI workload — libraries do that work.",
+          "status": "decided",
+          "source": "lead",
+          "discussion": [],
+          "review": null
+        },
+        {
+          "id": "ADR-002",
+          "date": "2026-07-28",
+          "title": "Spring Boot 3.4.x",
+          "context": "",
+          "reversibility": "two-way",
+          "options": [],
+          "choice": "Spring Boot 3.4.x",
+          "rationale": "Mature, first-class Java 21 support.",
+          "status": "decided",
+          "source": "lead",
+          "discussion": [],
+          "review": null
+        },
+        {
+          "id": "ADR-003",
+          "date": "2026-07-28",
+          "title": "MongoDB 7 as vector + document store",
+          "context": "",
+          "reversibility": "one-way",
+          "options": [],
+          "choice": "MongoDB 7",
+          "rationale": "Portable local -> dev -> prod; already used at work; stores documents and vectors together.",
+          "status": "decided",
+          "source": "lead",
+          "discussion": [],
+          "review": null
+        },
+        {
+          "id": "ADR-004",
+          "date": "2026-07-28",
+          "title": "Jina AI embeddings (jina-embeddings-v3, 1024-dim)",
+          "context": "",
+          "reversibility": "two-way",
+          "options": [],
+          "choice": "jina-embeddings-v3 (1024-dim)",
+          "rationale": "Matches the original work stack.",
+          "status": "decided",
+          "source": "lead",
+          "discussion": [],
+          "review": null
+        },
+        {
+          "id": "ADR-005",
+          "date": "2026-07-28",
+          "title": "Python MCP server as the agent interface",
+          "context": "",
+          "reversibility": "two-way",
+          "options": [],
+          "choice": "Python 3.11+ MCP server (thin proxy, no business logic)",
+          "rationale": "Native MCP SDK; standard integration layer for agents.",
+          "status": "decided",
+          "source": "lead",
+          "discussion": [],
+          "review": null
+        },
+        {
+          "id": "ADR-006",
+          "date": "2026-07-28",
+          "title": "Adapters from day one",
+          "context": "",
+          "reversibility": "one-way",
+          "options": [],
+          "choice": "CodeSource / TicketSource / DocSource interfaces",
+          "rationale": "Lets the personal GitHub+Markdown build deploy at work by swapping implementations, without touching services.",
+          "status": "decided",
+          "source": "lead",
+          "discussion": [],
+          "review": null
+        },
+        {
+          "id": "ADR-007",
+          "date": "2026-07-28",
+          "title": "Database-independent persistence (storage ports + adapters)",
+          "context": "Tech lead prefers DB-independent development. Domain/services should not depend on MongoDB directly so the store can be swapped (Postgres/pgvector, Elasticsearch, etc.) without touching business logic.",
+          "reversibility": "one-way",
+          "options": [
+            {
+              "name": "Storage ports + adapters (hexagonal)",
+              "pros": [
+                "Services depend on DocumentStore/VectorStore interfaces, not MongoTemplate",
+                "Swapping DB = new adapter only",
+                "Matches the CodeSource/TicketSource/DocSource philosophy"
+              ],
+              "cons": [
+                "Slightly more boilerplate up front",
+                "VectorStore port must be designed to fit different similarity-search models"
+              ]
+            },
+            {
+              "name": "Spring Data repositories only",
+              "pros": [
+                "Less code",
+                "Standard Spring abstraction"
+              ],
+              "cons": [
+                "Leaks store semantics, esp. vector search",
+                "Swapping DB still touches domain-facing repos"
+              ]
+            },
+            {
+              "name": "Keep direct MongoTemplate (status quo)",
+              "pros": [
+                "Fastest to build"
+              ],
+              "cons": [
+                "Not portable",
+                "Contradicts the stated preference"
+              ]
+            }
+          ],
+          "choice": "",
+          "rationale": "",
+          "status": "proposed",
+          "source": "agent",
+          "discussion": [
+            {
+              "role": "lead",
+              "text": "Refined: split persistence by KIND, not by store. Semantic (code units / vectors) and relational (code relationships) are different domains, each with its own port family and pluggable adapters selected by config. A transformation layer inside each adapter maps domain <-> store. Mongo-as-relational is a legitimate configured choice behind RelationStore (it is the office reality today) — the port is what prevents lock-in when Neo4j arrives. Domain owns a stable CodeUnitId shared by both stores. Clean-sheet design: office MVP informs via learnings only, its schema is not inherited. Phase 2: Neo4j adapter, graph traversal, dual-write consistency. Tracked as CTXR-11; decision to be settled after empirical inputs Q1-Q4.",
+              "ts": "2026-07-29T21:01:45.763Z"
+            }
+          ],
+          "review": null
+        }
+      ],
+      "tickets": [
+        {
+          "id": "CTXR-1",
+          "title": "Bootstrap Spring Boot",
+          "effort": "XS",
+          "status": "done",
+          "deps": [],
+          "description": "Stand up the Spring Boot skeleton: pom (Java 21, Boot 3.4), main app, health endpoint, config, test.",
+          "acceptanceCriteria": [
+            {
+              "text": "pom.xml targets Java 21 and Spring Boot 3.4.x with web + actuator",
+              "done": true
+            },
+            {
+              "text": "Application boots and GET /ping returns service status",
+              "done": true
+            },
+            {
+              "text": "application.yml sets port 8080 and actuator health",
+              "done": true
+            },
+            {
+              "text": "Context-load test present",
+              "done": true
+            },
+            {
+              "text": "Committed to master with README documenting the branch/PR workflow",
+              "done": true
+            }
+          ],
+          "sessions": [
+            {
+              "date": "2026-07-28",
+              "summary": "Scaffolded Spring Boot skeleton and committed to master; added ContextRAG + DevTracker docs under docs/.",
+              "nextSteps": "Begin CTXR-2 (MongoDB + configuration) on a feature branch."
+            }
+          ],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-2",
+          "title": "MongoDB + configuration",
+          "effort": "S",
+          "status": "done",
+          "deps": [
+            "CTXR-1"
+          ],
+          "description": "Wire MongoDB (Spring Data Mongo), externalize config, docker-compose for local Mongo.",
+          "acceptanceCriteria": [
+            {
+              "text": "Spring Data MongoDB dependency + connection config",
+              "done": true
+            },
+            {
+              "text": "docker-compose brings up MongoDB locally",
+              "done": true
+            },
+            {
+              "text": "Health check confirms DB connectivity",
+              "done": true
+            },
+            {
+              "text": "Observability: actuator exposes metrics + Prometheus scrape endpoint",
+              "done": true
+            },
+            {
+              "text": "Dedicated MongoDB ping endpoint (GET /ping/mongo) reports status + latency",
+              "done": true
+            }
+          ],
+          "sessions": [
+            {
+              "date": "2026-07-28",
+              "summary": "Added spring-boot-starter-data-mongodb; externalized MongoDB connection via MONGODB_URI/MONGODB_DATABASE in application.yml; added docker-compose (mongo:7) with a ping healthcheck; enabled actuator health show-details so the Mongo health indicator surfaces DB connectivity.",
+              "nextSteps": "CTXR-3: Embedding service (Jina jina-embeddings-v3, 1024-dim).",
+              "raw": ""
+            },
+            {
+              "date": "2026-07-28",
+              "summary": "Extended CTXR-2 per review: added micrometer-registry-prometheus with metrics/prometheus actuator endpoints (tagged application=contextrag), and a GET /ping/mongo endpoint running the Mongo ping command with round-trip latency.",
+              "nextSteps": "Push to feature branch; CTXR-3 next."
+            },
+            {
+              "date": "2026-07-28",
+              "summary": "Hardened /ping/mongo per review: offloaded the ping to a dedicated executor (async CompletableFuture, daemon threads) so it never blocks MVC request threads; made the whole feature toggleable via contextrag.mongo.ping.enabled with configurable pool-size and timeout-ms; added SLF4J logging including error logs in catch/timeout paths.",
+              "nextSteps": "Push branch; await merge; then CTXR-3."
+            }
+          ],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-3",
+          "title": "Embedding service (Jina)",
+          "effort": "S",
+          "status": "todo",
+          "deps": [
+            "CTXR-2"
+          ],
+          "description": "EmbeddingService calling Jina jina-embeddings-v3 (1024-dim), with API key config and error handling.",
+          "acceptanceCriteria": [
+            {
+              "text": "EmbeddingService returns a 1024-dim vector for input text",
+              "done": false
+            },
+            {
+              "text": "API key read from config/env",
+              "done": false
+            },
+            {
+              "text": "Handles API errors gracefully",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-4",
+          "title": "Document model + storage",
+          "effort": "S",
+          "status": "todo",
+          "deps": [
+            "CTXR-2",
+            "CTXR-11"
+          ],
+          "description": "Document model (source, type, content, metadata, embedding) and storage/retrieval via repository. NOTE: to be reshaped as the MongoDB SEMANTIC adapter behind the CodeUnitStore port defined in CTXR-11 (no Spring Data types in the domain).",
+          "acceptanceCriteria": [
+            {
+              "text": "Document model with embedding field persists to MongoDB",
+              "done": false
+            },
+            {
+              "text": "Repository supports add / get / list",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-5",
+          "title": "GitHub code adapter (JGit)",
+          "effort": "M",
+          "status": "todo",
+          "deps": [
+            "CTXR-4",
+            "CTXR-3"
+          ],
+          "description": "CodeSource implementation: clone/read a GitHub repo via JGit, chunk files, embed, store.",
+          "acceptanceCriteria": [
+            {
+              "text": "CodeSource interface defined",
+              "done": false
+            },
+            {
+              "text": "GitHub+JGit implementation ingests a repo into documents",
+              "done": false
+            },
+            {
+              "text": "Files chunked and embedded on ingest",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-6",
+          "title": "GitHub issues adapter",
+          "effort": "S",
+          "status": "todo",
+          "deps": [
+            "CTXR-4",
+            "CTXR-3"
+          ],
+          "description": "TicketSource implementation over the GitHub REST issues API.",
+          "acceptanceCriteria": [
+            {
+              "text": "TicketSource interface defined",
+              "done": false
+            },
+            {
+              "text": "GitHub issues ingested into documents and embedded",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-7",
+          "title": "Markdown docs adapter",
+          "effort": "S",
+          "status": "todo",
+          "deps": [
+            "CTXR-4",
+            "CTXR-3"
+          ],
+          "description": "DocSource implementation reading local Markdown files.",
+          "acceptanceCriteria": [
+            {
+              "text": "DocSource interface defined",
+              "done": false
+            },
+            {
+              "text": "Local Markdown files ingested and embedded",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-8",
+          "title": "Vector search API",
+          "effort": "M",
+          "status": "todo",
+          "deps": [
+            "CTXR-4",
+            "CTXR-3"
+          ],
+          "description": "REST endpoint performing semantic vector search over stored documents, returning ranked results with citations.",
+          "acceptanceCriteria": [
+            {
+              "text": "POST /search embeds the query and returns top-k documents",
+              "done": false
+            },
+            {
+              "text": "Results include source metadata for citation",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-9",
+          "title": "Python MCP server",
+          "effort": "M",
+          "status": "todo",
+          "deps": [
+            "CTXR-8"
+          ],
+          "description": "Thin Python MCP server exposing vector_search, add/get/list, pr_get_scope, connection_info over stdio; proxies to the Spring Boot API.",
+          "acceptanceCriteria": [
+            {
+              "text": "MCP tools appear in Claude Desktop",
+              "done": false
+            },
+            {
+              "text": "vector_search proxies to the REST API and returns results",
+              "done": false
+            },
+            {
+              "text": "No business logic in the MCP layer",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-10",
+          "title": "Ship: PR scope tool + Docker Compose + README",
+          "effort": "M",
+          "status": "todo",
+          "deps": [
+            "CTXR-9"
+          ],
+          "description": "pr_get_scope tool, full docker-compose (Mongo + API + MCP), and README. Fresh clone + compose up -> working end to end.",
+          "acceptanceCriteria": [
+            {
+              "text": "docker compose up -d brings up Mongo, API, and MCP server on a clean machine",
+              "done": false
+            },
+            {
+              "text": "pr_get_scope returns the changed-file scope for a PR",
+              "done": false
+            },
+            {
+              "text": "End-to-end: ingest a repo, ask a question, agent calls vector_search and answers with citations",
+              "done": false
+            }
+          ],
+          "sessions": [],
+          "scratchpad": ""
+        },
+        {
+          "id": "CTXR-11",
+          "title": "Domain structure: CodeUnit + CodeRelationship with port-per-kind adapters",
+          "status": "todo",
+          "effort": "M",
+          "deps": [
+            "CTXR-2"
+          ],
+          "description": "FOUNDATIONAL (blocks CTXR-4 despite the number). Give code a first-class domain structure from day 1 instead of a store-shaped one. Model CodeUnit and CodeRelationship as plain domain records with a stable CodeUnitId that both stores key off. Define two port FAMILIES by kind: semantic (index/search code units) and relational (store/traverse relationships). Each port has pluggable adapters chosen by config, with a transformation layer (mapper) inside each adapter converting domain <-> store representation. Key insight: Mongo-as-relational is a LEGITIMATE configured choice behind the RelationStore port — the port is what stops it becoming debt when Neo4j arrives later. Design is clean-sheet: the office MVP is a prototype used for LEARNINGS ONLY, its schema is explicitly not inherited.",
+          "technicalNotes": "Target shape:\ndomain/model: CodeUnit, CodeRelationship(from,to,type), CodeUnitId — plain records, ZERO persistence annotations.\ndomain/port/semantic: CodeUnitStore (index, search)\ndomain/port/relational: RelationStore (link, neighbors, traverse)\nadapter/semantic/mongo, adapter/relational/mongo (+ adapter/relational/neo4j in Phase 2)\nConfig selects the adapter per kind, e.g. contextrag.store.units=mongo / contextrag.store.relations=mongo|neo4j.\nArchUnit test fails the build if domain packages import springframework.data or any driver package.\nDeferred to Phase 2: dual-write consistency across the two stores (idempotent re-ingest / outbox) and rich graph traversal.",
+          "acceptanceCriteria": [
+            {
+              "text": "DRAFT — pending the empirical inputs discussion (see open questions Q1-Q4)",
+              "done": false
+            },
+            {
+              "text": "Domain models (CodeUnit, CodeRelationship, CodeUnitId) defined with no persistence annotations",
+              "done": false
+            },
+            {
+              "text": "Semantic port (CodeUnitStore) and relational port (RelationStore) defined in domain",
+              "done": false
+            },
+            {
+              "text": "Adapter selected per kind via configuration",
+              "done": false
+            },
+            {
+              "text": "Transformation layer (mapper) lives inside each adapter; domain never sees store types",
+              "done": false
+            },
+            {
+              "text": "ArchUnit test enforces domain has no dependency on Spring Data or DB drivers",
+              "done": false
+            }
+          ],
+          "sessions": [
+            {
+              "date": "2026-07-29",
+              "summary": "Design discussion (no code). Agreed: code is the primary knowledge store and needs domain structure from day 1. Semantic vs relational are genuinely different concerns -> separate port families per kind, adapters under each, chosen by the developer via config. Corrected an earlier position: Mongo-for-relationships is fine BEHIND a port (it is the office reality today); the port prevents lock-in when switching to Neo4j. Prototype learnings drive the model, NOT the prototype schema. Domain must own a stable identity shared by both stores. Phase 2 keeps: Neo4j adapter, graph traversal/cross-service intelligence, and dual-write consistency.",
+              "nextSteps": "Resume tomorrow: answer Q1-Q4 (unit granularity, which relationship types earned their keep, the real queries the prototype answered badly, what to discard). Then finalize acceptance criteria, settle ADR-007/ADR-008, and reshape CTXR-4 as the Mongo semantic adapter."
+            }
+          ],
+          "scratchpad": ""
+        }
+      ],
+      "milestones": [
+        {
+          "id": "MS-001",
+          "title": "Spring Boot skeleton bootstrapped",
+          "status": "done",
+          "date": "2026-07-28",
+          "description": "CTXR-1 delivered on master.",
+          "sessionSummary": "pom.xml (Java 21, Boot 3.4.1, web + actuator), ContextRagApplication, /ping HealthController, application.yml (port 8080), context-load test, .gitignore, README with dev workflow. Committed to master."
+        },
+        {
+          "id": "MS-002",
+          "title": "Project docs committed",
+          "status": "done",
+          "date": "2026-07-28",
+          "description": "ContextRAG description and DevTracker spec added to the repo.",
+          "sessionSummary": "docs/contextrag-project-description.md and docs/devtracker-agent.md committed to master."
+        },
+        {
+          "id": "MS-003",
+          "title": "MongoDB wired + configuration externalized",
+          "description": "CTXR-2 delivered on feature/CTXR-2-mongodb-configuration.",
+          "status": "done",
+          "date": "2026-07-28",
+          "sessionSummary": "Spring Data MongoDB dependency + externalized config, docker-compose for local Mongo, actuator health reports DB ping.",
+          "diffRef": {
+            "from": "master",
+            "to": "feature/CTXR-2-mongodb-configuration"
+          }
+        }
+      ],
+      "questions": [
+        {
+          "id": "Q-001",
+          "lane": "human",
+          "text": "Q1 Domain structure: what code-unit granularity proved useful in the prototype (file / class / method / semantic chunk), and where did that choice hurt?",
+          "resolved": false
+        },
+        {
+          "id": "Q-002",
+          "lane": "human",
+          "text": "Q2 Domain structure: which relationship types actually earned their keep, and which were added but never used?",
+          "resolved": false
+        },
+        {
+          "id": "Q-003",
+          "lane": "human",
+          "text": "Q3 Domain structure: which real queries did the prototype answer badly? (These should drive the port design rather than guesses.)",
+          "resolved": false
+        },
+        {
+          "id": "Q-004",
+          "lane": "human",
+          "text": "Q4 Domain structure: what in the prototype felt structurally wrong in hindsight and should be discarded?",
+          "resolved": false
+        }
+      ],
+      "activity": [
+        {
+          "ts": "2026-07-28T13:38:35.986Z",
+          "type": "session",
+          "text": "CTXR-2 session: 3/3 AC, status done",
+          "refId": "CTXR-2"
+        },
+        {
+          "ts": "2026-07-28T13:38:35.986Z",
+          "type": "milestone",
+          "text": "MS-003 delivered: MongoDB wired + configuration externalized",
+          "refId": "MS-003"
+        },
+        {
+          "ts": "2026-07-28T14:29:28.359Z",
+          "type": "decision",
+          "text": "ADR-007 proposed: Database-independent persistence (storage ports + adapters)",
+          "refId": "ADR-007"
+        },
+        {
+          "ts": "2026-07-28T14:52:46.008Z",
+          "type": "note",
+          "text": "Captured CTXR-2 PR-review lessons as standing constraints + WORKFLOW pre-PR checklist.",
+          "refId": ""
+        },
+        {
+          "ts": "2026-07-29T21:01:45.763Z",
+          "type": "debate",
+          "text": "ADR-007 debate: Refined: split persistence by KIND, not by store. Semantic (code units / vectors…",
+          "refId": "ADR-007"
+        },
+        {
+          "ts": "2026-07-29T21:01:45.763Z",
+          "type": "question",
+          "text": "Q-001 opened: Q1 Domain structure: what code-unit granularity proved useful in the prototype (",
+          "refId": "Q-001"
+        },
+        {
+          "ts": "2026-07-29T21:01:45.763Z",
+          "type": "question",
+          "text": "Q-002 opened: Q2 Domain structure: which relationship types actually earned their keep, and wh",
+          "refId": "Q-002"
+        },
+        {
+          "ts": "2026-07-29T21:01:45.763Z",
+          "type": "question",
+          "text": "Q-003 opened: Q3 Domain structure: which real queries did the prototype answer badly? (These s",
+          "refId": "Q-003"
+        },
+        {
+          "ts": "2026-07-29T21:01:45.763Z",
+          "type": "question",
+          "text": "Q-004 opened: Q4 Domain structure: what in the prototype felt structurally wrong in hindsight ",
+          "refId": "Q-004"
+        },
+        {
+          "ts": "2026-07-29T21:01:45.763Z",
+          "type": "note",
+          "text": "CTXR-11 created: domain structure (CodeUnit + CodeRelationship, port-per-kind adapters). Discussion continues tomorrow.",
+          "refId": ""
+        },
+        {
+          "ts": "2026-07-29T21:07:56.896Z",
+          "type": "note",
+          "text": "Live store relocated to the DevTracker repo folder; agent now has direct read/write access.",
+          "refId": ""
+        },
+        {
+          "ts": "2026-07-29T21:23:17.573Z",
+          "type": "page",
+          "text": "PG-001 created: Domain structure — CodeUnit & CodeRelationship",
+          "refId": "PG-001"
+        },
+        {
+          "ts": "2026-07-29T21:23:17.578Z",
+          "type": "page",
+          "text": "PG-001 diagram added: Persistence ports & adapters",
+          "refId": "PG-001"
+        },
+        {
+          "ts": "2026-07-29T21:23:17.583Z",
+          "type": "page",
+          "text": "PG-001 comment: Correction worth keeping visible: I initially argued Mongo-for-relationships was…",
+          "refId": "PG-001"
+        },
+        {
+          "ts": "2026-07-29T21:23:17.588Z",
+          "type": "page",
+          "text": "PG-001 comment: Caution on scope: a port is only honourable if every adapter can satisfy it. Def…",
+          "refId": "PG-001"
+        },
+        {
+          "ts": "2026-07-29T21:26:45.299Z",
+          "type": "page",
+          "text": "PG-002 created: Session log — 30 Jul 2026",
+          "refId": "PG-002"
+        },
+        {
+          "ts": "2026-07-29T21:26:45.306Z",
+          "type": "page",
+          "text": "PG-002 comment: Meta-observation from the session: the value of DevTracker showed up the moment …",
+          "refId": "PG-002"
+        },
+        {
+          "ts": "2026-07-29T22:12:09.261Z",
+          "type": "page",
+          "text": "PG-003 created: ContextRAG — project overview",
+          "refId": "PG-003"
+        },
+        {
+          "ts": "2026-07-29T22:12:09.266Z",
+          "type": "page",
+          "text": "PG-004 created: Architecture & stack",
+          "refId": "PG-004"
+        },
+        {
+          "ts": "2026-07-29T22:12:09.271Z",
+          "type": "page",
+          "text": "PG-004 diagram added: ContextRAG architecture",
+          "refId": "PG-004"
+        },
+        {
+          "ts": "2026-07-29T22:12:56.409Z",
+          "type": "page",
+          "text": "PG-005 created: Phase 1 story map",
+          "refId": "PG-005"
+        },
+        {
+          "ts": "2026-07-29T22:12:56.416Z",
+          "type": "page",
+          "text": "PG-006 created: Delivered — code walkthrough",
+          "refId": "PG-006"
+        },
+        {
+          "ts": "2026-07-29T22:12:56.420Z",
+          "type": "page",
+          "text": "PG-007 created: CTXR-1 — Spring Boot skeleton",
+          "refId": "PG-007"
+        },
+        {
+          "ts": "2026-07-29T22:12:56.425Z",
+          "type": "page",
+          "text": "PG-008 created: CTXR-2 — MongoDB, observability & ping",
+          "refId": "PG-008"
+        },
+        {
+          "ts": "2026-07-29T22:13:22.187Z",
+          "type": "page",
+          "text": "PG-009 created: Engineering practices & workflow",
+          "refId": "PG-009"
+        },
+        {
+          "ts": "2026-07-29T22:13:22.193Z",
+          "type": "page",
+          "text": "PG-010 created: Session logs",
+          "refId": "PG-010"
+        },
+        {
+          "ts": "2026-07-29T22:13:22.199Z",
+          "type": "page",
+          "text": "PG-002 updated: Session log — 30 Jul 2026",
+          "refId": "PG-002"
+        },
+        {
+          "ts": "2026-07-29T22:13:22.205Z",
+          "type": "page",
+          "text": "PG-001 updated: Domain structure — CodeUnit & CodeRelationship",
+          "refId": "PG-001"
+        },
+        {
+          "ts": "2026-07-29T23:02:28.323Z",
+          "type": "page",
+          "text": "PG-011 created: Origins — how ContextRAG was scoped",
+          "refId": "PG-011"
+        },
+        {
+          "ts": "2026-07-29T23:02:28.329Z",
+          "type": "page",
+          "text": "PG-012 created: The context problem at scale",
+          "refId": "PG-012"
+        },
+        {
+          "ts": "2026-07-29T23:02:28.335Z",
+          "type": "page",
+          "text": "PG-013 created: Field validation — the SPARK thread",
+          "refId": "PG-013"
+        },
+        {
+          "ts": "2026-07-29T23:03:17.762Z",
+          "type": "page",
+          "text": "PG-014 created: Predecessor — ContextVectorDB (MVP 1)",
+          "refId": "PG-014"
+        },
+        {
+          "ts": "2026-07-29T23:03:17.767Z",
+          "type": "page",
+          "text": "PG-015 created: Stack selection — the Java version decision",
+          "refId": "PG-015"
+        },
+        {
+          "ts": "2026-07-29T23:03:17.773Z",
+          "type": "page",
+          "text": "PG-016 created: The office agent delivery loop",
+          "refId": "PG-016"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.670Z",
+          "type": "page",
+          "text": "PG-012 updated: The context problem at scale",
+          "refId": "PG-012"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.677Z",
+          "type": "page",
+          "text": "PG-017 created: Three-tier context model",
+          "refId": "PG-017"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.683Z",
+          "type": "page",
+          "text": "PG-018 created: The four real constraints",
+          "refId": "PG-018"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.687Z",
+          "type": "page",
+          "text": "PG-019 created: Why Markdown files aren't the answer",
+          "refId": "PG-019"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.693Z",
+          "type": "page",
+          "text": "PG-014 updated: Predecessor — ContextVectorDB (MVP 1)",
+          "refId": "PG-014"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.699Z",
+          "type": "page",
+          "text": "PG-020 created: MVP 1 epic breakdown",
+          "refId": "PG-020"
+        },
+        {
+          "ts": "2026-07-29T23:04:38.704Z",
+          "type": "page",
+          "text": "PG-021 created: The shared-context experiment",
+          "refId": "PG-021"
+        },
+        {
+          "ts": "2026-07-29T23:05:24.563Z",
+          "type": "page",
+          "text": "PG-004 updated: Architecture & stack",
+          "refId": "PG-004"
+        },
+        {
+          "ts": "2026-07-29T23:05:24.570Z",
+          "type": "page",
+          "text": "PG-022 created: The adapter layer — the portability hinge",
+          "refId": "PG-022"
+        },
+        {
+          "ts": "2026-07-29T23:05:24.578Z",
+          "type": "page",
+          "text": "PG-023 created: Stack choices & rationale",
+          "refId": "PG-023"
+        },
+        {
+          "ts": "2026-07-29T23:05:24.585Z",
+          "type": "page",
+          "text": "PG-024 created: Known risks & open technical questions",
+          "refId": "PG-024"
+        },
+        {
+          "ts": "2026-07-29T23:06:03.058Z",
+          "type": "page",
+          "text": "PG-001 updated: Domain structure — CodeUnit & CodeRelationship",
+          "refId": "PG-001"
+        },
+        {
+          "ts": "2026-07-29T23:06:03.065Z",
+          "type": "page",
+          "text": "PG-025 created: Persistence port families — semantic vs relational",
+          "refId": "PG-025"
+        },
+        {
+          "ts": "2026-07-29T23:06:03.071Z",
+          "type": "page",
+          "text": "PG-026 created: Enforcing the boundary & deferred concerns",
+          "refId": "PG-026"
+        },
+        {
+          "ts": "2026-07-29T23:06:03.076Z",
+          "type": "page",
+          "text": "PG-027 created: Open inputs (Q1–Q4)",
+          "refId": "PG-027"
+        },
+        {
+          "ts": "2026-07-29T23:06:49.850Z",
+          "type": "page",
+          "text": "PG-009 updated: Engineering practices & workflow",
+          "refId": "PG-009"
+        },
+        {
+          "ts": "2026-07-29T23:06:49.856Z",
+          "type": "page",
+          "text": "PG-028 created: The story delivery loop",
+          "refId": "PG-028"
+        },
+        {
+          "ts": "2026-07-29T23:06:49.863Z",
+          "type": "page",
+          "text": "PG-029 created: Definition of Ready for PR",
+          "refId": "PG-029"
+        },
+        {
+          "ts": "2026-07-29T23:06:49.869Z",
+          "type": "page",
+          "text": "PG-030 created: Commit & testing conventions",
+          "refId": "PG-030"
+        },
+        {
+          "ts": "2026-07-29T23:06:49.874Z",
+          "type": "page",
+          "text": "PG-031 created: Process lessons paid for in real time",
+          "refId": "PG-031"
+        },
+        {
+          "ts": "2026-07-29T23:07:17.773Z",
+          "type": "page",
+          "text": "PG-032 created: Phase 2 — cross-service intelligence (Shape B)",
+          "refId": "PG-032"
+        },
+        {
+          "ts": "2026-07-29T23:07:17.783Z",
+          "type": "page",
+          "text": "PG-033 created: Glossary",
+          "refId": "PG-033"
+        },
+        {
+          "ts": "2026-07-29T23:07:52.930Z",
+          "type": "page",
+          "text": "PG-034 created: Tooling — DevTracker & Atlas",
+          "refId": "PG-034"
+        },
+        {
+          "ts": "2026-07-29T23:07:52.940Z",
+          "type": "page",
+          "text": "PG-035 created: DevTracker MCP tools",
+          "refId": "PG-035"
+        },
+        {
+          "ts": "2026-07-29T23:07:52.956Z",
+          "type": "page",
+          "text": "PG-036 created: Atlas — how to use it",
+          "refId": "PG-036"
+        },
+        {
+          "ts": "2026-07-29T23:17:48.931Z",
+          "type": "note",
+          "text": "LAB-001 captured (anti-pattern): Silent fallback when a page limit was hit — the system quietly returne",
+          "refId": "LAB-001"
+        },
+        {
+          "ts": "2026-07-29T23:17:48.943Z",
+          "type": "note",
+          "text": "LAB-002 captured (anti-pattern): Comparing a string by reference instead of value. Cheap bug, expensive",
+          "refId": "LAB-002"
+        },
+        {
+          "ts": "2026-07-29T23:17:48.951Z",
+          "type": "note",
+          "text": "LAB-003 captured (anti-pattern): \"Batching\" that did not actually batch — the interface implied batchin",
+          "refId": "LAB-003"
+        },
+        {
+          "ts": "2026-07-29T23:17:48.960Z",
+          "type": "note",
+          "text": "LAB-004 captured (observation): Relationships were modelled as Mongo documents purely because Mongo wa",
+          "refId": "LAB-004"
+        },
+        {
+          "ts": "2026-07-29T23:17:48.968Z",
+          "type": "note",
+          "text": "LAB-005 captured (idea): Context disclosure enforcement: make the agent state which context it ",
+          "refId": "LAB-005"
+        },
+        {
+          "ts": "2026-07-29T23:17:48.978Z",
+          "type": "page",
+          "text": "PG-037 created: Lab — capturing raw thoughts",
+          "refId": "PG-037"
+        }
+      ],
+      "chat": [],
+      "architecture": {
+        "name": "",
+        "type": "",
+        "content": "",
+        "description": ""
+      },
+      "diagrams": [],
+      "journeys": [],
+      "pages": [
+        {
+          "id": "PG-001",
+          "title": "Domain structure — CodeUnit & CodeRelationship",
+          "parentId": "PG-003",
+          "body": "Code is the project's largest knowledge store, so it needs a **domain structure from day 1** — not a store-shaped one. This page is the settled position; the thread below is the debate that produced it.\n\n## The problem it fixes\n\nThe office prototype put both code units and code relationships straight into MongoDB, because Mongo was the only store available. That works, but the representation is welded to Mongo: the day a graph database arrives, the relationship data *and every line of code touching it* have to change.\n\nThe fix is not \"use a different database\". It is to put a domain layer in between.\n\n## The domain model\n\nPlain records, **zero persistence annotations** — no `@Document`, no `ObjectId`, no BSON, no Spring Data types:\n\n- `CodeUnit` — a unit of code carrying its semantic content\n- `CodeRelationship` — an edge: `from`, `to`, `type`\n- `CodeUnitId` — a **stable identity shared by both stores**\n\nIdentity is the load-bearing part. A code unit lives in both worlds at once — an embedding in the semantic store, a node in the relational store. Neither adapter may invent its own id, or the two views drift and cannot be correlated.\n\n## Subpages\n\n- **Persistence port families** — semantic vs relational, and why the split.\n- **Enforcing the boundary** — ArchUnit, and what is deliberately deferred.\n- **Open inputs (Q1–Q4)** — the prototype learnings that must land before the acceptance criteria can be finalised.\n\n## Status\n\nTracked as **CTXR-11**, which blocks CTXR-4. ADR-007 is still *proposed* — awaiting the Tech Lead's decision.",
+          "tags": [
+            "domain",
+            "persistence",
+            "ports-and-adapters"
+          ],
+          "storyIds": [
+            "CTXR-11",
+            "CTXR-4"
+          ],
+          "diagrams": [
+            {
+              "id": "DGM-001",
+              "name": "Persistence ports & adapters",
+              "kind": "architecture",
+              "format": "drawio",
+              "type": "",
+              "content": "<mxfile host=\"app.diagrams.net\"><diagram name=\"Persistence ports\"><mxGraphModel dx=\"900\" dy=\"640\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"850\" pageHeight=\"600\" math=\"0\" shadow=\"0\"><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/>\n<mxCell id=\"dom\" value=\"DOMAIN (no store knowledge)\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontStyle=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"240\" y=\"40\" width=\"360\" height=\"130\" as=\"geometry\"/></mxCell>\n<mxCell id=\"model\" value=\"CodeUnit&#10;CodeRelationship (from, to, type)&#10;CodeUnitId (shared identity)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"260\" y=\"75\" width=\"320\" height=\"80\" as=\"geometry\"/></mxCell>\n<mxCell id=\"svc\" value=\"Services (depend only on ports)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"300\" y=\"200\" width=\"240\" height=\"40\" as=\"geometry\"/></mxCell>\n<mxCell id=\"psem\" value=\"PORT · semantic&#10;CodeUnitStore\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"180\" y=\"285\" width=\"180\" height=\"60\" as=\"geometry\"/></mxCell>\n<mxCell id=\"prel\" value=\"PORT · relational&#10;RelationStore\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"480\" y=\"285\" width=\"180\" height=\"60\" as=\"geometry\"/></mxCell>\n<mxCell id=\"amongo1\" value=\"MongoCodeUnitStore&#10;(+ mapper)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"120\" y=\"410\" width=\"150\" height=\"60\" as=\"geometry\"/></mxCell>\n<mxCell id=\"apg\" value=\"PgVector…&#10;(later)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"290\" y=\"410\" width=\"110\" height=\"60\" as=\"geometry\"/></mxCell>\n<mxCell id=\"amongo2\" value=\"MongoRelationStore&#10;(+ mapper)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"440\" y=\"410\" width=\"150\" height=\"60\" as=\"geometry\"/></mxCell>\n<mxCell id=\"aneo\" value=\"Neo4jRelationStore&#10;(Phase 2)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"610\" y=\"410\" width=\"150\" height=\"60\" as=\"geometry\"/></mxCell>\n<mxCell id=\"note\" value=\"Dependency arrow points INWARD only.&#10;Adapter chosen by config; ArchUnit enforces the boundary.\" style=\"text;html=1;align=center;fillColor=none;fontSize=11;fontColor=#666666\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"240\" y=\"500\" width=\"400\" height=\"40\" as=\"geometry\"/></mxCell>\n<mxCell id=\"e1\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block\" edge=\"1\" parent=\"1\" source=\"svc\" target=\"psem\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"e2\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block\" edge=\"1\" parent=\"1\" source=\"svc\" target=\"prel\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"e3\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1\" edge=\"1\" parent=\"1\" source=\"amongo1\" target=\"psem\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"e4\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1\" edge=\"1\" parent=\"1\" source=\"apg\" target=\"psem\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"e5\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1\" edge=\"1\" parent=\"1\" source=\"amongo2\" target=\"prel\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"e6\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1\" edge=\"1\" parent=\"1\" source=\"aneo\" target=\"prel\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n</root></mxGraphModel></diagram></mxfile>",
+              "description": "Domain owns the models and both port families; adapters depend inward. Dashed adapters are not built yet.",
+              "updated": "2026-07-29T21:23:17.578Z"
+            }
+          ],
+          "comments": [
+            {
+              "role": "agent",
+              "text": "Correction worth keeping visible: I initially argued Mongo-for-relationships was a misuse to avoid. Behind the RelationStore port it is a legitimate configured choice — and it is the office reality today. The port is what prevents lock-in later, so the pragmatic choice costs nothing structurally.",
+              "ts": "2026-07-29T21:23:17.583Z"
+            },
+            {
+              "role": "agent",
+              "text": "Caution on scope: a port is only honourable if every adapter can satisfy it. Defining RelationStore with rich graph traversal now would be a lie Mongo cannot honour; defining retrieval as pure vector similarity would reduce Neo4j to a dumb index later. Keep the port scoped to what the domain needs today and add a graph-shaped capability in Phase 2.",
+              "ts": "2026-07-29T21:23:17.588Z"
+            }
+          ],
+          "created": "2026-07-29T21:23:17.573Z",
+          "updated": "2026-07-29T23:06:03.058Z"
+        },
+        {
+          "id": "PG-002",
+          "title": "Session log — 30 Jul 2026",
+          "parentId": "PG-010",
+          "body": "Session date: **30 July 2026**. First full day of the ContextRAG rebuild. Two stories delivered, the working loop proved out, and DevTracker itself gained a knowledge layer.\n\n## Shipped\n\n- **CTXR-1 — Bootstrap Spring Boot** (merged to `master`): Java 21 + Boot 3.4.1, `/ping`, actuator, context-load test, README.\n- **CTXR-2 — MongoDB + configuration** (merged): Spring Data Mongo with connection externalised via `MONGODB_URI`/`MONGODB_DATABASE`, `docker-compose` (mongo:7) with a ping healthcheck, plus everything review added below.\n- Repo now on GitHub at `Nish-Hub/ContextRAGDev`; `WORKFLOW.md` and `PROGRESS.md` established.\n\n## The working loop (now standing practice)\n\nRefer to the story in DevTracker → cut `feature/<TICKET-ID>-<slug>` → build to the acceptance criteria → record the timeline (ticket done, ACs ticked, milestone + session logged) → raise a PR. **Merging is the Tech Lead's alone — the agent never merges.**\n\n## What the CTXR-2 review taught us\n\nThese were all caught in review rather than in the first cut, so they are now **standing constraints** plus a *Definition of Ready for PR* checklist in `WORKFLOW.md`:\n\n1. **Observability is table stakes** — metrics/Prometheus ship with the first commit, not bolted on when someone notices.\n2. **Never block request threads with I/O probes** — the Mongo ping moved to a dedicated bounded executor with a timeout.\n3. **Optional features must be config-toggleable** — enable flag plus tunables, never hardcoded always-on.\n4. **Log failures properly** — the exception in every catch/timeout path; no silent 503s.\n5. **Package structure from day one** — `config` / `controller` separation shouldn't wait for a review nudge.\n6. **Design for database independence** — ADR-007; see the domain-structure page.\n\n## Design thinking\n\nThe significant thread was persistence structure — see **“Domain structure — CodeUnit & CodeRelationship” (PG-001)** for the settled position. Headline: code needs a domain structure from day 1; semantic and relational are different kinds, each with its own port family and config-selected adapters; Mongo-as-relational is legitimate *behind a port*; the office MVP informs by **learnings only**, its schema is not inherited.\n\nStill open: **ADR-007** awaits your decision, and Q1–Q4 (unit granularity, which relationship types earned their keep, the real queries the prototype answered badly, what to discard) block CTXR-11's acceptance criteria.\n\n## Process lessons (cost us real time today)\n\n- **Create GitHub repos empty.** The auto-generated \"Initial commit\" gave the remote `master` a history unrelated to ours, which silently disabled the merge button. Fixed with a force-push.\n- **Push `master` before opening a PR** — the base has to exist.\n- **Run DevTracker from source during development.** A stale packaged `.dmg` (built 19 Jul) carried a duplicate `extractRevisedDescription` declaration — a hard SyntaxError that killed every button. The source had been fixed on 21 Jul. Rebuild the `.dmg` only at milestones.\n- **Commit finished work promptly.** ~2,000 lines of completed Playground and Coder work sat uncommitted and nearly got stashed.\n\n## DevTracker changes\n\n- **Live store relocated** to `~/Documents/DevTracker/workspace.json` via `DEVTRACKER_STORE`, with `npm run start:local` / `mcp:local`. The agent now reads *and writes* the same file the app reads — no more Export/Import round-trip.\n- **Atlas shipped** — this knowledge layer: nested pages, markdown body plus a Tech Lead/Agent discussion thread, page-owned diagrams (draw.io round-trip reused), many-to-many story links, and 7 `atlas_*` MCP tools. Page outline now appears in `get_briefing`.\n\n## Next session\n\n1. Answer Q1–Q4, then settle ADR-007 and finalise CTXR-11's acceptance criteria.\n2. Move the `WORKFLOW.md` checklist onto a small doc PR off a freshly pulled `master`.\n3. Then CTXR-3 (Jina embedding service) or CTXR-11 (domain structure) — CTXR-11 first if the inputs are ready, since CTXR-4 depends on it.\n4. Restart the MCP server so the `atlas_*` tools register.",
+          "tags": [
+            "session-log",
+            "retrospective"
+          ],
+          "storyIds": [
+            "CTXR-1",
+            "CTXR-2",
+            "CTXR-11"
+          ],
+          "diagrams": [],
+          "comments": [
+            {
+              "role": "agent",
+              "text": "Meta-observation from the session: the value of DevTracker showed up the moment a preference (\"database-independent development\") became ADR-007 plus a constraint instead of a chat message. Tomorrow's session can start cold and still be grounded — that is the whole point of the tool.",
+              "ts": "2026-07-29T21:26:45.306Z"
+            }
+          ],
+          "created": "2026-07-29T21:26:45.298Z",
+          "updated": "2026-07-29T22:13:22.199Z"
+        },
+        {
+          "id": "PG-003",
+          "title": "ContextRAG — project overview",
+          "parentId": "",
+          "body": "## What it is\n\nContextRAG is a personal, office-deployable **context retrieval system** that lets AI coding agents query across a project's code, issues, documentation and decision history throughout the development lifecycle. It indexes those sources into a vector store and exposes semantic search to an agent (Claude Desktop / Claude Code) over MCP, so the agent can pull the *right* context during tasks like PR review instead of working blind.\n\n## The problem it solves\n\nWhen a human tech lead works with AI coding agents at speed, **context evaporates**. Decisions scatter, architecture intent degrades, and each agent session starts cold. For single-service work that is tolerable; for anything touching multiple services it breaks down — the agent understands one service's code but not how services relate, what contracts exist between them, or which past decisions constrain the current one.\n\nContextRAG makes that context **queryable**: a searchable, persistent knowledge layer the agent consults on demand.\n\n## Who it's for\n\nA tech lead / solution architect building tooling to support high-velocity AI-assisted development — first as a personal project, then deployed into a team environment once validated.\n\n## Approach\n\nBuild a full, self-contained context RAG on personal infrastructure, ship it to GitHub, and deploy the validated result at work. The stack and design are deliberately chosen to be **portable from a personal machine to a corporate environment** — which is why the adapter layer exists from day one rather than as a later refactor.\n\n## Phases\n\n| Phase | Shape | Content |\n|---|---|---|\n| **Phase 1** | Shape A | Usable single-service context server: bootstrap, Mongo + config, embeddings, document model + storage, GitHub code/issues + Markdown adapters, vector search API, Python MCP server, shipping ticket. Enough to use at work for single-service PR reviews. |\n| **Phase 2** | Shape B | Cross-service intelligence: detect Kafka producers/consumers and HTTP endpoint providers/callers during ingestion, build a cross-service dependency graph with traversal, review session cache, hybrid search, multi-provider embeddings, production hardening. |\n\n## Definition of done for the MVP (Phase 1)\n\n- A fresh clone plus `docker compose up -d` brings up MongoDB, the Spring Boot API and the Python MCP server on a clean machine.\n- The MCP tools appear in Claude Desktop.\n- End to end: ingest a GitHub repo, ask the agent a question about it, and it calls `vector_search`, retrieves relevant context, and answers **with citations**.\n\n## Related tooling\n\n**DevTracker** (this app) holds ContextRAG's stories, acceptance criteria, decisions, milestones and now Atlas knowledge pages, exposing them to the coding agent over MCP so project state is maintained by the agent itself.",
+          "tags": [
+            "overview",
+            "charter"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:12:09.260Z",
+          "updated": "2026-07-29T22:12:09.260Z"
+        },
+        {
+          "id": "PG-004",
+          "title": "Architecture & stack",
+          "parentId": "PG-003",
+          "body": "How the Phase 1 system is layered, top to bottom. The diagram on this page is editable in diagrams.net.\n\n## Request flow\n\n```\nClaude Desktop / Claude Code\n        │  MCP (stdio / SSE)\n        ▼\nPython MCP server            ← thin proxy, no business logic\n        │  REST (localhost:8080)\n        ▼\nSpring Boot API              ← controllers → services → pluggable adapters\n        │                    │\n        ▼                    ▼\n   MongoDB              Jina AI embeddings (1024-dim)\n (docs + vectors)\n        ▲\n        │  adapters ingest from\n        ▼\nGitHub repos · GitHub Issues · local Markdown\n```\n\n**Ingestion** flows downward: an adapter reads a source, the embedding service turns text into a 1024-dim vector, storage persists document plus vector. **Retrieval** runs the same path in reverse: the agent asks, the query is embedded, Mongo returns nearest neighbours, and the API answers with citations.\n\n## Layer rules\n\n- The **Python MCP server stays a thin proxy** — no business logic; it forwards to the Boot API. CTXR-9 is the only Python component in Phase 1.\n- **Controllers → services → adapters.** A controller never reaches past a service into an adapter. Business logic lives in services, not adapters.\n- **Persistence is store-independent** (ADR-007) — the domain depends on ports; concrete stores are adapters.\n\n## Subpages\n\n- **The adapter layer** — the portability hinge, and why it exists on day one.\n- **Stack choices & rationale** — every technology and the reason behind it.\n- **Known risks & open technical questions** — what could bite, and what is still undecided.",
+          "tags": [
+            "architecture",
+            "stack"
+          ],
+          "storyIds": [],
+          "diagrams": [
+            {
+              "id": "DGM-001",
+              "name": "ContextRAG architecture",
+              "kind": "architecture",
+              "format": "drawio",
+              "type": "",
+              "content": "<mxfile host=\"app.diagrams.net\"><diagram name=\"ContextRAG architecture\"><mxGraphModel dx=\"900\" dy=\"700\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"850\" pageHeight=\"750\" math=\"0\" shadow=\"0\"><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/>\n<mxCell id=\"agent\" value=\"Claude Desktop / Claude Code&#10;(the review agent)\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"300\" y=\"30\" width=\"250\" height=\"55\" as=\"geometry\"/></mxCell>\n<mxCell id=\"mcp\" value=\"Python MCP server&#10;thin proxy — no business logic&#10;vector_search · pr_get_scope · add/get/list\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"280\" y=\"140\" width=\"290\" height=\"70\" as=\"geometry\"/></mxCell>\n<mxCell id=\"boot\" value=\"Spring Boot API — Java 21 · Boot 3.4\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontStyle=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"140\" y=\"265\" width=\"570\" height=\"180\" as=\"geometry\"/></mxCell>\n<mxCell id=\"ctrl\" value=\"Controllers&#10;ingestion · search · pr\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"165\" y=\"300\" width=\"160\" height=\"55\" as=\"geometry\"/></mxCell>\n<mxCell id=\"svc\" value=\"Services&#10;ingestion · embedding · storage\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"380\" y=\"300\" width=\"200\" height=\"55\" as=\"geometry\"/></mxCell>\n<mxCell id=\"adapt\" value=\"Adapters (pluggable) — CodeSource · TicketSource · DocSource\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"165\" y=\"380\" width=\"510\" height=\"45\" as=\"geometry\"/></mxCell>\n<mxCell id=\"mongo\" value=\"MongoDB 7&#10;documents + vectors\" style=\"shape=cylinder3;boundedLbl=1;backgroundOutline=1;html=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"500\" y=\"500\" width=\"160\" height=\"80\" as=\"geometry\"/></mxCell>\n<mxCell id=\"jina\" value=\"Jina AI&#10;jina-embeddings-v3&#10;1024-dim\" style=\"rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"190\" y=\"500\" width=\"160\" height=\"80\" as=\"geometry\"/></mxCell>\n<mxCell id=\"src\" value=\"External sources — GitHub repos · GitHub Issues · local Markdown\" style=\"rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#b3b3b3;dashed=1\" vertex=\"1\" parent=\"1\"><mxGeometry x=\"165\" y=\"630\" width=\"510\" height=\"45\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a1\" value=\"MCP · stdio / SSE\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;verticalAlign=bottom;fontSize=10\" edge=\"1\" parent=\"1\" source=\"agent\" target=\"mcp\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a2\" value=\"REST · localhost:8080\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;verticalAlign=bottom;fontSize=10\" edge=\"1\" parent=\"1\" source=\"mcp\" target=\"boot\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a3\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block\" edge=\"1\" parent=\"1\" source=\"ctrl\" target=\"svc\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a4\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block\" edge=\"1\" parent=\"1\" source=\"svc\" target=\"adapt\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a5\" value=\"stores vectors\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10\" edge=\"1\" parent=\"1\" source=\"adapt\" target=\"mongo\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a6\" value=\"embeds text\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;fontSize=10\" edge=\"1\" parent=\"1\" source=\"adapt\" target=\"jina\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n<mxCell id=\"a7\" value=\"ingests from\" style=\"edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;dashed=1;fontSize=10\" edge=\"1\" parent=\"1\" source=\"src\" target=\"adapt\"><mxGeometry relative=\"1\" as=\"geometry\"/></mxCell>\n</root></mxGraphModel></diagram></mxfile>",
+              "description": "Agent → MCP proxy → Spring Boot (controllers/services/adapters) → MongoDB + Jina. Adapters ingest from GitHub and Markdown.",
+              "updated": "2026-07-29T22:12:09.271Z"
+            }
+          ],
+          "comments": [],
+          "created": "2026-07-29T22:12:09.266Z",
+          "updated": "2026-07-29T23:05:24.562Z"
+        },
+        {
+          "id": "PG-005",
+          "title": "Phase 1 story map",
+          "parentId": "PG-003",
+          "body": "The 11 stories of Phase 1 (Shape A) and how they gate each other. Live status lives on the Workspace board — this page is the *shape of the plan* and the reasoning behind the ordering.\n\n| Story | Title | Effort | Depends on | Note |\n|---|---|---|---|---|\n| CTXR-1 | Bootstrap Spring Boot | XS | — | ✅ delivered |\n| CTXR-2 | MongoDB + configuration | S | CTXR-1 | ✅ delivered (grew observability + ping in review) |\n| CTXR-11 | **Domain structure** — CodeUnit & CodeRelationship | M | CTXR-2 | Foundational despite the number; blocks CTXR-4 |\n| CTXR-3 | Embedding service (Jina) | S | CTXR-2 | Unblocked now |\n| CTXR-4 | Document model + storage | S | CTXR-2, CTXR-11 | Reshaped as the Mongo **semantic adapter** behind the port |\n| CTXR-5 | GitHub code adapter (JGit) | M | CTXR-3, CTXR-4 | `CodeSource` impl; chunk + embed on ingest |\n| CTXR-6 | GitHub issues adapter | S | CTXR-3, CTXR-4 | `TicketSource` impl |\n| CTXR-7 | Markdown docs adapter | S | CTXR-3, CTXR-4 | `DocSource` impl |\n| CTXR-8 | Vector search API | M | CTXR-3, CTXR-4 | Top-k with citation metadata; the `VectorStore` port is designed here, against a real query |\n| CTXR-9 | Python MCP server | M | CTXR-8 | Thin proxy; tools appear in Claude Desktop |\n| CTXR-10 | Ship: PR scope tool + Compose + README | M | CTXR-9 | Fresh clone → `compose up` → works end to end |\n\n## Ordering rationale\n\n- **CTXR-11 goes before CTXR-4** because storage shape is a domain decision, not an implementation detail. Building CTXR-4 first would bake Mongo into the domain and defeat ADR-007.\n- **CTXR-3 and CTXR-4 are parallel** — both only need CTXR-2. CTXR-3 is safe to start immediately since it touches no persistence.\n- **The three adapters (5, 6, 7) fan out** from the same pair of dependencies and could be done in any order, or concurrently.\n- **The `VectorStore` port is deliberately deferred to CTXR-8**, not designed up front. Similarity search differs enough between Mongo `$vectorSearch` and pgvector that guessing the interface before writing a real query tends to produce the wrong abstraction.\n- **CTXR-10 is a real story, not paperwork** — \"fresh clone plus compose up works on a clean machine\" is the MVP's definition of done.",
+          "tags": [
+            "stories",
+            "plan"
+          ],
+          "storyIds": [
+            "CTXR-3",
+            "CTXR-4",
+            "CTXR-5",
+            "CTXR-6",
+            "CTXR-7",
+            "CTXR-8",
+            "CTXR-9",
+            "CTXR-10",
+            "CTXR-11"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:12:56.409Z",
+          "updated": "2026-07-29T22:12:56.409Z"
+        },
+        {
+          "id": "PG-006",
+          "title": "Delivered — code walkthrough",
+          "parentId": "PG-003",
+          "body": "What actually exists in `Nish-Hub/ContextRAGDev` on `master` today, and why it looks the way it does. Subpages cover each delivered story.\n\n## Repository layout\n\n```\ncontextRagDev/\n├── pom.xml                      Java 21, Boot 3.4.1, web + actuator + data-mongodb + prometheus\n├── docker-compose.yml           mongo:7 with a ping healthcheck + named volume\n├── README.md                    build/run, config table, observability\n├── WORKFLOW.md                  the development loop + Definition of Ready for PR\n├── PROGRESS.md                  delivery status mirror of DevTracker\n├── docs/\n│   ├── contextrag-project-description.md\n│   └── devtracker-agent.md\n└── src/\n    ├── main/java/com/contextrag/\n    │   ├── ContextRagApplication.java     @SpringBootApplication (component-scans below)\n    │   ├── config/\n    │   │   ├── MongoPingConfig.java       executor bean + feature gate\n    │   │   └── MongoPingProperties.java   @ConfigurationProperties record\n    │   └── controller/\n    │       ├── HealthController.java      GET /ping\n    │       └── MongoPingController.java   GET /ping/mongo (async)\n    ├── main/resources/application.yml\n    └── test/java/com/contextrag/ContextRagApplicationTests.java\n```\n\n## Package convention\n\n`config` / `controller` split from the start. As stories land, new code goes into `service`, `repository`, `domain` and `adapter` packages following the same convention — never flat in the root package.\n\n## Git state\n\n- `master` holds the reviewed baseline; CTXR-1 and CTXR-2 are merged.\n- Branch naming: `feature/<TICKET-ID>-<slug>`, e.g. `feature/CTXR-2-mongodb-configuration`.\n- Not yet wired: CI. Verification is currently a local `mvn -q verify` before merge — a known gap worth closing.",
+          "tags": [
+            "code",
+            "delivered"
+          ],
+          "storyIds": [
+            "CTXR-1",
+            "CTXR-2"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:12:56.416Z",
+          "updated": "2026-07-29T22:12:56.416Z"
+        },
+        {
+          "id": "PG-007",
+          "title": "CTXR-1 — Spring Boot skeleton",
+          "parentId": "PG-006",
+          "body": "The foundation commit. Deliberately minimal — a baseline that boots and proves the toolchain.\n\n## What it contains\n\n- **`pom.xml`** — `spring-boot-starter-parent` 3.4.1, `java.version` 21, starters: `web`, `actuator`.\n- **`ContextRagApplication`** — `@SpringBootApplication` at the root package so component scanning reaches `config` and `controller`.\n- **`HealthController`** — `GET /ping` → `{\"status\":\"ok\",\"service\":\"contextrag\"}`. A liveness signal that needs no dependencies.\n- **`application.yml`** — port 8080, application name, actuator health/info exposure.\n- **`ContextRagApplicationTests`** — context-load test. Cheap, but it catches the majority of wiring regressions.\n- **`.gitignore`**, **`README.md`** documenting the branch/PR workflow.\n\n## Why Java 21, not 25/26\n\nChosen to match the office environment, not for newest features (ADR-001). LTS support to 2028+, virtual threads GA. The JDK version is irrelevant to the AI workload — the libraries do that work, not the JDK.\n\n## Note\n\nNo Maven wrapper is committed; the build needs a local Maven install (`brew install maven`) alongside JDK 21. Adding `mvnw` would make a fresh clone fully self-contained and is a reasonable small follow-up.",
+          "tags": [
+            "code"
+          ],
+          "storyIds": [
+            "CTXR-1"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:12:56.420Z",
+          "updated": "2026-07-29T22:12:56.420Z"
+        },
+        {
+          "id": "PG-008",
+          "title": "CTXR-2 — MongoDB, observability & ping",
+          "parentId": "PG-006",
+          "body": "Started as \"wire Mongo and externalise config\" and **doubled in scope during review** — that review is where most of the standing engineering constraints came from.\n\n## Persistence wiring\n\n- `spring-boot-starter-data-mongodb`.\n- Connection externalised — nothing hardcoded:\n\n| Variable | Default | Purpose |\n|---|---|---|\n| `MONGODB_URI` | `mongodb://localhost:27017` | Connection string |\n| `MONGODB_DATABASE` | `contextrag` | Database name |\n\n- **`docker-compose.yml`** — `mongo:7`, port 27017, named volume `contextrag-mongo-data`, and a healthcheck running `db.adminCommand('ping')`.\n- No eager connection at startup, so the context-load test stays green without a running Mongo.\n\n## Observability (added in review)\n\n`micrometer-registry-prometheus`, with actuator exposing `health`, `info`, `metrics` and `prometheus`. Metrics tagged `application=contextrag`. `health.show-details: always` surfaces the auto-configured Mongo health indicator.\n\nThe lesson generalised into a constraint: **observability ships with the first commit, not when someone notices it is missing.**\n\n## The Mongo ping endpoint\n\n`GET /ping/mongo` → `{\"mongo\":\"up\",\"database\":\"contextrag\",\"pingMs\":<n>}`, or `503` with the error when unreachable.\n\nThree review corrections shaped it, each now a standing constraint:\n\n1. **Don't block request threads.** The ping runs on a dedicated fixed pool of **daemon** threads (`mongo-ping-*`) via an async `CompletableFuture`; the servlet thread is released immediately. An `orTimeout` guard covers a hung driver call.\n2. **Make it toggleable.** The controller *and* the executor bean are `@ConditionalOnProperty` on `contextrag.mongo.ping.enabled` (default true, or `MONGO_PING_ENABLED`). Disabled means the endpoint and the pool both disappear. `pool-size` and `timeout-ms` are configurable.\n3. **Log failures with the exception.** `error` on both the command failure and the timeout path; `debug` on success; `info` once at startup with the pool config.\n\n## Design note left open\n\n`orTimeout` completes the HTTP response but lets the underlying driver call finish on its own; the fixed pool bounds concurrency. If stricter behaviour is wanted, the options are hard cancellation or a circuit breaker.\n\n## Structure\n\nSplit into three classes rather than one: `MongoPingProperties` (config binding record), `MongoPingConfig` (executor bean + feature gate), `MongoPingController` (async endpoint) — and the flat root package was reorganised into `config` / `controller` in the same review.",
+          "tags": [
+            "code",
+            "observability",
+            "mongodb"
+          ],
+          "storyIds": [
+            "CTXR-2"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:12:56.425Z",
+          "updated": "2026-07-29T22:12:56.425Z"
+        },
+        {
+          "id": "PG-009",
+          "title": "Engineering practices & workflow",
+          "parentId": "",
+          "body": "How we build. Mirrors `WORKFLOW.md` in the repo — that file is what an agent reads in-repo; these pages carry the *why*.\n\n## The non-negotiables\n\n1. **DevTracker is the source of truth.** Never start a story from memory.\n2. **One story, one branch, one PR.** Feedback lands as further commits on the same branch.\n3. **The agent never merges.** Merging is the Tech Lead's alone.\n4. **`master` always holds a working, reviewed baseline.** Nothing lands except through an approved PR.\n\n## Subpages\n\n- **The story delivery loop** — the five steps, in order.\n- **Definition of Ready for PR** — the pre-review checklist, and where each item came from.\n- **Commit & testing conventions** — message format, test expectations.\n- **Process lessons paid for in real time** — the tooling and git mistakes that cost hours.\n\n## Standing engineering constraints\n\nNine constraints are live in DevTracker and appear in every `get_briefing`. Four came directly from the CTXR-2 review: observability by default, no blocking I/O on request threads, config-toggleable optional features, structured logging with exceptions. The others cover runtime parity, portability, adapters, phase discipline, and database independence.",
+          "tags": [
+            "process",
+            "workflow"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:13:22.187Z",
+          "updated": "2026-07-29T23:06:49.849Z"
+        },
+        {
+          "id": "PG-010",
+          "title": "Session logs",
+          "parentId": "",
+          "body": "One page per working session: what shipped, what was decided, what is open. Newest subpages first in practice.\n\nThe purpose is continuity — a session log plus `get_briefing` should be enough for a cold session to pick up exactly where the last one stopped, without the Tech Lead re-explaining anything.",
+          "tags": [
+            "session-log"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T22:13:22.193Z",
+          "updated": "2026-07-29T22:13:22.193Z"
+        },
+        {
+          "id": "PG-011",
+          "title": "Origins — how ContextRAG was scoped",
+          "parentId": "PG-003",
+          "body": "ContextRAG did not start as a database project. It started from a working observation: an AI coding agent operating at service level hits a wall the moment a change spans services — and the wall is **context**, not capability.\n\nThis branch records where the project came from, so no future session has to re-derive the reasoning. Source: the planning conversation transcript (`contextrag-literal-transcript.md`).\n\n## The path in one paragraph\n\nAn agent pipeline at work delivers one story per branch and commits feedback back to the same branch. It works at service level. The next bottleneck was context: how do you give an agent the knowhow of a whole platform? A first prototype (ContextVectorDB, \"MVP 1\") proved the shape but was built with company tooling and could not leave that environment. So the decision was to rebuild it clean on personal infrastructure as a **full context RAG**, ship it to GitHub, and deploy the validated result at work — which is what this project (CTXR) is.\n\n## What this branch contains\n\n- **The context problem at scale** — the three-tier model, and the four constraints that actually bite.\n- **Field validation — the SPARK thread** — real evidence from the intended users, in their own words.\n- **Predecessor — ContextVectorDB (MVP 1)** — what existed, its epic breakdown, and the shared-context experiment.\n- **Stack selection — the Java version decision** — how Java 26 → 25 → 17 → 21 got resolved, and the AI-features myth.\n\n## Why it matters that this is written down\n\nTwo of these pages exist because the reasoning was *nearly* lost: the prototype's lessons were compacted out of the original session, and the Java decision was re-litigated three times in one conversation before landing. Both are exactly the kind of context ContextRAG itself is meant to preserve.",
+          "tags": [
+            "origins",
+            "motivation",
+            "history"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:02:28.321Z",
+          "updated": "2026-07-29T23:02:28.321Z"
+        },
+        {
+          "id": "PG-012",
+          "title": "The context problem at scale",
+          "parentId": "PG-011",
+          "body": "The framing that produced this project: the bottleneck is **context management**, not vector storage.\n\n## Why service level works and multi-service does not\n\nAn agent can write a story for a single service because everything it needs is bounded — one repo, one ticket, searchable docs. A multi-service story needs Service A's code *and* Service B's, how they talk (Kafka topics, REST contracts, shared models), the cross-service decisions behind that, and why previous attempts failed.\n\nThat body of context is genuinely large. Not infinite, but nowhere near a prompt window.\n\n## Subpages\n\n- **Three-tier context model** — the layers of context an agent needs, and which tier each phase delivers.\n- **The four real constraints** — why the hard part isn't storage.\n- **Why Markdown files aren't the answer** — the question that kept coming up, and the actual answer.\n\n## The one-line conclusion\n\nWithout cross-service context an agent keeps hitting the same wall: *\"I understand Service A's code, but not why A and B talk the way they do.\"* Closing that gap is what Phase 2 exists for.",
+          "tags": [
+            "problem",
+            "context"
+          ],
+          "storyIds": [
+            "CTXR-8"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:02:28.329Z",
+          "updated": "2026-07-29T23:04:38.670Z"
+        },
+        {
+          "id": "PG-013",
+          "title": "Field validation — the SPARK thread",
+          "parentId": "PG-011",
+          "body": "On 28 July 2026 a solutioning and delivery call thread independently hit the exact wall this project is built to solve — on a real internal system, among the people who would use the tool. Recorded here as motivation evidence. **Substance only; no names or verbatim quotes attributed.**\n\n## What the thread established\n\n- A self-hosted model was producing **generic output** because it had no knowledge of the ecosystem it was reasoning about. The complaint was essentially: *there is nothing about our ecosystem in this — how do you feed in our context?*\n- The self-hosted models were acknowledged as weaker than frontier models **and** sealed off from the outside world.\n- The sharpest line was effectively the project thesis: **it is not \"some context\" — the whole knowhow of the system has to be there to generate meaningful stories.**\n\n## The correct diagnosis: genericness, not hallucination\n\nThe failure mode was named precisely — the model does not hallucinate, it returns generic responses shaped by keywords, because it has no context of the running application. That distinction matters: hallucination suggests a reliability fix, genericness points squarely at a **retrieval** fix.\n\n## The token wall — why RAG beats a fat MD file\n\nThe thread's own proposal was to hand-write a Markdown file to give the model direction. Useful as a stopgap, but the ceiling was identified in the same conversation: **reading all the repos would exhaust the token budget by itself.**\n\nThat single observation is the strongest argument for retrieval: fetch the relevant slice on demand rather than pre-loading everything.\n\n## The progression it implies\n\n1. **Now** — hand-written MD per project. Gives direction, not real context.\n2. **Next** — generated MD summaries per repo/service.\n3. **Endgame** — ContextRAG: queryable, indexed context so the agent pulls what it needs per story, with no token blowup.\n\nOther ideas surfaced that map onto this design: a standard way to *query* existing-application context, restructuring requirement documents to include it, and a prompt template pointing at the relevant doc space, ticket project and repos — which is, in effect, an MCP-fed context brief.\n\n## Why this page exists\n\nIt is real evidence of the pain, from the intended users, dated before the rebuild started. That makes it the most persuasive artifact in the project when explaining *why* ContextRAG is worth building — the problem statement is in the users' own terms, not the builder's.",
+          "tags": [
+            "motivation",
+            "evidence"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:02:28.335Z",
+          "updated": "2026-07-29T23:02:28.335Z"
+        },
+        {
+          "id": "PG-014",
+          "title": "Predecessor — ContextVectorDB (MVP 1)",
+          "parentId": "PG-011",
+          "body": "The office prototype that came before this project. **Its learnings are inherited; its code and schema are not** — it was built with company tooling and cannot be reused outside that environment, which is exactly why CTXR is a clean-sheet rebuild.\n\n## MVP 1 vs MVP 2\n\n| | **MVP 1** — the prototype | **MVP 2** — what CTXR became |\n|---|---|---|\n| Scope | Service-level context only | Cross-service intelligence |\n| Data | Code vectors from one repo generation | Code + issues + docs via adapters |\n| Storage | Single MongoDB instance | MongoDB behind storage ports |\n| Interface | Exposed via MCP | Python MCP proxy over a Boot API |\n| Missing | Cross-service edges, keyword doc ingestion, session cache, prompt discipline | All planned as Phase 2 |\n\nThese were never in conflict — MVP 1 was a stepping stone to prove the shared-context idea before adding architectural smarts.\n\n## Explicitly not inherited\n\nThe prototype's schema encodes compromises made under constraint — chiefly that MongoDB was the only store available, so relationships were modelled as Mongo documents with no domain layer between. Copying that shape would import the compromise. See the domain-structure pages for what replaced it.\n\n## Subpages\n\n- **MVP 1 epic breakdown** — the ~20 tickets across 6 epics, and which survive into CTXR.\n- **The shared-context experiment** — the dev-cluster test, its two challenges, and the conclusion that shaped this project.",
+          "tags": [
+            "history",
+            "prototype"
+          ],
+          "storyIds": [
+            "CTXR-11"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:03:17.761Z",
+          "updated": "2026-07-29T23:04:38.693Z"
+        },
+        {
+          "id": "PG-015",
+          "title": "Stack selection — the Java version decision",
+          "parentId": "PG-011",
+          "body": "The stack landed on **Java 21 LTS + Spring Boot 3.4.x** (ADR-001, ADR-002), but only after four candidate versions. Recorded because the *reasoning* is more useful than the outcome, and because it was re-litigated three times in a single conversation.\n\n## The path\n\n| Proposed | Outcome | Why |\n|---|---|---|\n| **Java 26** | Rejected | Released 17 March 2026, first non-LTS after 25. Supported by Spring Boot 4.1, but premier support ends around September 2026 — too short for anything production-bound. Fine for pure learning. |\n| **Java 25 LTS** | Chosen, then revisited | The genuine sweet spot on paper: LTS through ~2033, modern, Spring Boot 4.1 support, enterprise credibility. |\n| **Java 17** | Rejected | Oldest active LTS, support ending ~September 2026. Gives up sequenced collections, module imports, flexible constructors and **virtual threads GA** — which matter here because the workload is concurrent HTTP calls. Also caps you at Spring Boot 3.x. |\n| **Java 21 LTS** | **Final** | Matches what the office actually runs. LTS through 2028+, virtual threads GA, first-class Spring Boot 3.4 support. |\n\n## The deciding question\n\nThe version debate only resolved once the right question was asked: **what does the office actually run?** Everything else was theory. Since the entire point of the project is to deploy the validated result at work, matching the target runtime beats having the newest features. That is now a standing constraint.\n\n## The AI-features myth — worth remembering\n\nA claim came up that Java 25 has \"more support for AI.\" It does not, in any way that matters here:\n\n- Five Java 25 features are marketed as AI-relevant — module import declarations, the Vector API, structured concurrency, scoped values, and JFR CPU-time profiling. **Java 26 has all five, further along.** So 25 versus 26 is not an AI-capability difference; 25's real advantage is simply LTS.\n- More importantly, **for a RAG + MCP backend none of those JDK features matter.** The embedding math runs on Jina's servers. The libraries — Spring AI, LangChain4j, an HTTP client — do the AI work, and they run on Java 17+.\n\n**Generalised lesson:** pick a JDK for support lifecycle, ecosystem and runtime parity — not for a feature list that a hosted API and a few libraries make irrelevant.\n\n## The other settled choices\n\nMongoDB 7 for documents + vectors, Jina `jina-embeddings-v3` at 1024 dimensions, a Python 3.11+ MCP server as a thin proxy, and GitHub repos / GitHub Issues / local Markdown as the Phase 1 sources — all chosen for the same reason: portability from a personal machine to a corporate environment. See the Decisions tab for ADR-001 to ADR-007.",
+          "tags": [
+            "stack",
+            "decision-history"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:03:17.767Z",
+          "updated": "2026-07-29T23:03:17.767Z"
+        },
+        {
+          "id": "PG-016",
+          "title": "The office agent delivery loop",
+          "parentId": "PG-011",
+          "body": "How the existing agent pipeline at work delivers code. Recorded because it is the environment ContextRAG must eventually plug into, and because its shape influenced our own workflow.\n\n## One story = one branch = one PR\n\n- Product creates a story → developer refines it with subtasks → moved to an \"AI development\" state → the coding agent **creates a new branch and raises a PR**.\n- Feedback — a PR comment, an edit to the story description, or a reply to a story comment — is picked up on a polling cycle of roughly 30–50 minutes.\n- The agent **commits fixes to the same branch**; no new PR is opened, and the existing PR updates automatically.\n\nSo: one story, one branch, one PR, **multiple commits as feedback loops in**.\n\n## The review loop as an SOP\n\n```\n6. If review findings exist:\n   — Comment on the story (description, reply, or PR comment)\n   — The agent polls every 30–50 minutes for new feedback\n   — It commits fixes to the same branch (the PR auto-updates)\n   — Re-run the review once the new commits appear\n\n7. Repeat until the first-level review is satisfied.\n8. Approve and pass to second-level review.\n```\n\n## Why it matters here\n\n1. **It works at service level today** — which is what made context the *next* bottleneck rather than a hypothetical one.\n2. **Multi-service stories are handleable by decomposition.** Splitting a multi-service feature into per-service stories works, *provided* the shared story description explains the contract between them. Cross-service detection then lets the agent see \"A exposes this endpoint, B calls it, here is the contract.\"\n3. **What decomposition cannot solve:** \"rewrite the architecture across three services to handle this edge case.\" That needs human judgement, and no retrieval layer changes it.\n\n## Influence on our own loop\n\nThe one-story-one-branch-one-PR discipline is echoed in `WORKFLOW.md` — a feature branch per story, feedback landing as further commits on that same branch rather than a new one, and a human approving the merge. CTXR-2 played out exactly this way: three review rounds, three commits, one PR.",
+          "tags": [
+            "history",
+            "workflow"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:03:17.773Z",
+          "updated": "2026-07-29T23:03:17.773Z"
+        },
+        {
+          "id": "PG-017",
+          "title": "Three-tier context model",
+          "parentId": "PG-012",
+          "body": "Context an agent needs, in three layers. Useful as a checklist for asking \"which tier does this feature serve?\"\n\n| Tier | What it is | Where it stands |\n|---|---|---|\n| **Tier 1 — Service-level** | A service's own code, tickets, docs, API contracts | What the prototype already did; Phase 1 rebuilds it properly |\n| **Tier 2 — Cross-service contracts** | Kafka topic schemas (who produces, who consumes, SLA), REST endpoint contracts (shapes, auth, versioning), shared data models (\"how is Customer defined across services?\"), service dependencies (who calls whom, in what order) | Phase 2 — the valuable part |\n| **Tier 3 — Architectural decisions** | ADRs, data-flow diagrams for the *feature* rather than the code, failure modes per service, historical rationale (\"we tried async, switched to sync because X\") | Largely missing everywhere, including here |\n\n## What this reordered\n\nCross-service relationship detection was deliberately promoted **above** general tool completeness. Making service-to-service relationships queryable is what unblocks the real use case; more MCP tools is nice-to-have.\n\n## Note on Tier 3\n\nTier 3 is partly why DevTracker and Atlas exist at all. Decisions, rationale and history captured in the tracker *are* Tier 3 context — and they are already queryable by an agent over MCP. ContextRAG covers Tiers 1 and 2 for code; the tracker covers Tier 3 for intent.",
+          "tags": [
+            "context",
+            "model"
+          ],
+          "storyIds": [
+            "CTXR-8"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:04:38.677Z",
+          "updated": "2026-07-29T23:04:38.677Z"
+        },
+        {
+          "id": "PG-018",
+          "title": "The four real constraints",
+          "parentId": "PG-012",
+          "body": "None of the hard problems are storage problems.\n\n## 1. Discoverability\n\nThe agent must know what context exists and when to fetch it. Given hundreds of doc pages on one flow, which ones matter for *this* story? Vector search gets it right roughly **70% of the time** — useful, not sufficient.\n\n## 2. Relevance ranking\n\nFor a cross-service story, which service's context should be read first? If A depends on B's API, read B's contract first. That requires understanding a **dependency graph**, not keyword similarity. This is the specific reason a relational/graph view of code matters, not just a semantic one.\n\n## 3. Session persistence\n\nAgents forget between stories. Five stories touching the same area re-read the same docs five times. A per-story session cache helps but only within a story — cross-session memory is a separate problem, and the one DevTracker attacks.\n\n## 4. Agent calibration\n\nKnowing when to say \"I need more context\" versus \"I can work with what I have.\" Agents tend to either **over-fetch** (burning tokens on noise) or **under-fetch** (missing the detail that mattered). Tuning this is iterative, and it is a prompt/system-design problem rather than an infrastructure one.\n\n## Why this list matters for design\n\nConstraints 1 and 2 shape the retrieval API (CTXR-8). Constraint 3 shapes the session cache in Phase 2. Constraint 4 shapes tool descriptions and the agent prompt — which is why tool wording is treated as a first-class deliverable rather than documentation.",
+          "tags": [
+            "context",
+            "constraints"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:04:38.683Z",
+          "updated": "2026-07-29T23:04:38.683Z"
+        },
+        {
+          "id": "PG-019",
+          "title": "Why Markdown files aren't the answer",
+          "parentId": "PG-012",
+          "body": "A question that recurred throughout the project's genesis: *do Markdown files have a size restriction?*\n\n## The literal answer\n\nNo. Markdown has no inherent size limit. But that is the wrong question, because the limits that bite are elsewhere:\n\n- A **single huge file** is hard to navigate and search.\n- **Splitting it into many files** means the agent must know which ones to read — the discoverability problem, moved rather than solved.\n- **No semantic indexing.** You get keyword search, nothing more.\n\n## The real distinction\n\n- `architecture.md` is written **for humans to read**.\n- An indexed, searchable, semantically-tagged corpus is **for agents to query**.\n\nThose are different artifacts with different requirements. Writing the first and hoping it serves the second is the mistake.\n\n## What agent-queryable context needs\n\n- Indexed content, not just files on disk\n- Tagging that supports filtering\n- Explicit cross-references between related concepts\n\n**It is an information-architecture problem, not a storage problem.**\n\n## The token wall\n\nIndependent field evidence sharpened this: reading all the repos would exhaust the token budget before any work began. That is the decisive argument — a static file cannot hold a platform's knowhow, and pre-loading everything defeats itself. Retrieval fetches the relevant slice on demand.\n\n## Where MD files *do* belong\n\nAs a **stopgap** that gives a model direction, and as the human-facing spec. This project uses them exactly that way: `WORKFLOW.md`, `PROGRESS.md` and `docs/` are for humans and for repo-level agent grounding — while the queryable layer is Atlas and, eventually, ContextRAG itself.",
+          "tags": [
+            "context",
+            "information-architecture"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:04:38.687Z",
+          "updated": "2026-07-29T23:04:38.687Z"
+        },
+        {
+          "id": "PG-020",
+          "title": "MVP 1 epic breakdown",
+          "parentId": "PG-014",
+          "body": "The prototype's backlog — roughly 20 tickets across 6 epics. Kept because much of it maps directly onto CTXR's Phase 2, and because the bug epic records real failure modes worth not repeating.\n\n## 1. Bug fixes / hardening\n\nDuplicate save, a **silent fallback** when a page limit was hit, a string compared by reference instead of value, and batching that wasn't actually batching.\n\n*Lesson worth carrying: silent fallbacks and reference-equality bugs were the most costly defects. A fallback that doesn't log is indistinguishable from correct behaviour until the data is wrong.*\n\n## 2. MCP completeness\n\nMerge keyword-based doc ingestion, wire up server extensions, review-summary CRUD tools, a hybrid search tool. → *Hybrid search resurfaces in CTXR Phase 2.*\n\n## 3. Agent prompt / workflow\n\nPublish an agent prompt, service auto-start and health flow, and **context disclosure enforcement** — making the agent state which context it actually used.\n\n*That last one is quietly the most interesting: it turns \"did the agent use the right context?\" from a guess into something observable.*\n\n## 4. Cross-service flow detection\n\nKafka producers/consumers, HTTP providers/callers, graph traversal tools. → **This is CTXR Phase 2's core.**\n\n## 5. Review ergonomics\n\nPR scope, call-path tracing, a review session cache model and its tools. → `pr_get_scope` survives into **CTXR-10**.\n\n## 6. Rollout\n\nPR template, team comms and turnaround expectations, an agent SOP.\n\n## Reading the list today\n\nEpics 4 and 5 are the durable value; 1 and 2 were prototype debt; 3 and 6 are adoption concerns that return whenever this is deployed to a team.",
+          "tags": [
+            "history",
+            "backlog"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:04:38.698Z",
+          "updated": "2026-07-29T23:04:38.698Z"
+        },
+        {
+          "id": "PG-021",
+          "title": "The shared-context experiment",
+          "parentId": "PG-014",
+          "body": "The test that motivated the rebuild: does a **shared** vector context across services actually help an agent with multi-service stories?\n\n## The setup\n\nRun the prototype's ingestion, persist vectors to a MongoDB on the dev cluster, expose it via an MCP server on that same cluster, then tell the coding agent it may query it for context. Before: each story's context was isolated and ephemeral. After: every story could reference one shared knowledge base.\n\n## Challenge 1 — network / port isolation\n\nIf the agent runs on a different cluster, it may not reach the MCP server at all. Requires a non-localhost endpoint, network rules permitting the agent's environment through, and authentication if the server isn't strictly internal. Solvable, but a platform dependency rather than a coding task.\n\n## Challenge 2 — \"when to pull the context\"\n\nThe harder problem. The agent doesn't inherently know which services a story touches, or which vectors are signal versus noise.\n\n| Option | Approach | Trade-off |\n|---|---|---|\n| A | Story explicitly lists related services and keywords | Reliable, but burdens the author and doesn't scale past a few services |\n| B | Agent parses the story, extracts domain terms, searches | No author burden, but pulls noise and wastes tokens |\n| **C — recommended** | **Hybrid:** agent extracts terms automatically; humans optionally tag related services when multi-service is obvious | Uses both signals |\n\n## The three tests defined\n\n1. **Reachability** — can the agent call the server at all? Verify with a connection check before anything else.\n2. **Quality** — give it a *known, already-reviewed* multi-service story. Does it call the server unprompted, fetch relevant vectors, and use them?\n3. **Distraction** — introduce a false-positive service in the results. Does it stay focused?\n\n## The conclusion that shaped CTXR\n\nThe biggest risk was never technical. It is **whether the agent knows when and how to use the context** — a prompt and system-design question, not a vector-database question. Hence CTXR treats tool descriptions and agent ergonomics as first-class deliverables.",
+          "tags": [
+            "history",
+            "experiment"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:04:38.704Z",
+          "updated": "2026-07-29T23:04:38.704Z"
+        },
+        {
+          "id": "PG-022",
+          "title": "The adapter layer — the portability hinge",
+          "parentId": "PG-004",
+          "body": "The single most important structural decision in the project (ADR-006).\n\n## The interfaces\n\n| Port | Phase 1 implementation | Office implementation |\n|---|---|---|\n| `CodeSource` | GitHub repos via JGit (CTXR-5) | Bitbucket |\n| `TicketSource` | GitHub Issues REST (CTXR-6) | JIRA |\n| `DocSource` | Local Markdown files (CTXR-7) | Confluence |\n\n## Why it exists from day one\n\nThe whole point of the project is that a build made on a personal machine deploys at work. Without this seam, \"deploy it at work\" means rewriting everything that touches a data source. With it, the office deployment **swaps implementations and touches nothing above them**.\n\nThis was adopted as a day-one constraint rather than a later refactor, because retrofitting a seam after services have grown around concrete sources is a rewrite, not a refactor.\n\n## The rule that keeps it honest\n\nBusiness logic lives in **services**, not adapters. An adapter's job is to fetch from its source and map into the domain shape — nothing else. The moment an adapter starts deciding *how* to chunk, rank or interpret, that logic is trapped in one source and the seam has leaked.\n\n## Relationship to the persistence ports\n\nADR-006 (ingestion adapters) and ADR-007 (storage ports) are the same idea applied at opposite ends of the system: the domain sits in the middle, and both the sources it reads from and the stores it writes to are pluggable. Ingestion adapters were always planned; storage ports were added once database independence became an explicit requirement.\n\n## Verification\n\nA seam that isn't enforced erodes. The ArchUnit test planned for CTXR-11 checks the storage side; the same technique applies here — the domain and services must not import a source-specific client type.",
+          "tags": [
+            "architecture",
+            "adapters"
+          ],
+          "storyIds": [
+            "CTXR-5",
+            "CTXR-6",
+            "CTXR-7"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:05:24.570Z",
+          "updated": "2026-07-29T23:05:24.570Z"
+        },
+        {
+          "id": "PG-023",
+          "title": "Stack choices & rationale",
+          "parentId": "PG-004",
+          "body": "Every technology choice and the reason behind it. The common thread: **portability from a personal machine to a corporate environment**, not novelty.\n\n| Layer | Choice | Why |\n|---|---|---|\n| Language | **Java 21 LTS** | Matches the office runtime. LTS to 2028+, virtual threads GA. (ADR-001) |\n| Framework | **Spring Boot 3.4.x** | Mature, first-class Java 21 support. (ADR-002) |\n| Store | **MongoDB 7** | Documents *and* vectors in one portable store; already used at work. (ADR-003) |\n| Embeddings | **Jina `jina-embeddings-v3`, 1024-dim** | Matches the original work stack. (ADR-004) |\n| Agent interface | **Python 3.11+ MCP server** | Native MCP SDK; the standard integration layer for agents. (ADR-005) |\n| Sources (Phase 1) | **GitHub repos, GitHub Issues, local Markdown** | Free and accessible for a personal build; adapters allow the swap. |\n| Observability | **Micrometer + Prometheus** via actuator | Standard, scrape-friendly, no vendor coupling. |\n| Local infra | **Docker Compose** | One command brings up Mongo; part of the MVP's definition of done. |\n\n## The deciding principle\n\nEvery row above could have a more modern or more specialised alternative — Qdrant instead of Mongo, a newer JDK, a local embedding model. Each was considered and rejected for the same reason: **runtime parity with the deployment target beats local optimality**, because a build that can't be deployed at work fails its actual purpose.\n\n## Where that principle has a cost\n\nChoosing Mongo for vectors accepts weaker vector-search ergonomics than a purpose-built vector DB. Choosing a hosted embedding API accepts a network dependency and an API key. Both are conscious trades — see the risks page.\n\n## History\n\nThe Java version alone went through four candidates before landing. That reasoning is worth reading once: see **Origins → Stack selection — the Java version decision**.",
+          "tags": [
+            "stack"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:05:24.578Z",
+          "updated": "2026-07-29T23:05:24.578Z"
+        },
+        {
+          "id": "PG-024",
+          "title": "Known risks & open technical questions",
+          "parentId": "PG-004",
+          "body": "Things that could bite, and decisions still genuinely open. Kept explicit so they are chosen rather than discovered.\n\n## Risks\n\n**1. Mongo vector search at scale.** The portable choice, but not a purpose-built vector store. Worth **benchmarking during Phase 1**, before the corpus grows and Phase 2 graph queries pile on top. If latency or recall disappoints, the storage port (ADR-007) is what makes a swap survivable.\n\n**2. Phase 2 static detection is genuinely hard.** Detecting Kafka producers/consumers and HTTP providers/callers from source is defeated by dynamic topic names, wrapper layers and indirection. Mitigation: **scope detection to real codebase conventions** rather than aiming for general correctness. Aiming for general correctness here is how Phase 2 becomes unshippable.\n\n**3. Embedding API dependency.** Ingestion needs Jina reachable and an API key present. A local model would remove the dependency at the cost of quality and parity — deliberately not done, but the embedding service is the natural seam if it ever matters.\n\n**4. Retrieval quality is unmeasured.** \"Vector search gets it right ~70% of the time\" is a rule of thumb, not a measurement of *this* system. Without an evaluation set, improvements to retrieval can't be distinguished from changes to it.\n\n## Open questions\n\n- **No CI.** Verification is a manual local `mvn -q verify` before merge. This is currently the weakest link in the workflow — a green-checks gate would make the PR discipline real rather than nominal.\n- **No Maven wrapper.** A fresh clone needs Maven installed. Committing `mvnw` would make the repo self-contained.\n- **Ping timeout semantics.** `orTimeout` completes the HTTP response but lets the driver call finish on its own; the fixed pool bounds concurrency. Alternatives if stricter behaviour is wanted: hard cancellation, or a circuit breaker.\n- **`VectorStore` port shape.** Deliberately deferred to CTXR-8 so it is designed against a real query rather than guessed. Designing it early risks an abstraction that fits neither Mongo's `$vectorSearch` nor pgvector.",
+          "tags": [
+            "risks",
+            "open-questions"
+          ],
+          "storyIds": [
+            "CTXR-8"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:05:24.585Z",
+          "updated": "2026-07-29T23:05:24.585Z"
+        },
+        {
+          "id": "PG-025",
+          "title": "Persistence port families — semantic vs relational",
+          "parentId": "PG-001",
+          "body": "Semantic and relational are genuinely different concerns, so each gets its own port family rather than one abstraction pretending to serve both.\n\n| Kind | Port | Responsibility | Adapters |\n|---|---|---|---|\n| **semantic** | `CodeUnitStore` | index + similarity search over code units | Mongo `$vectorSearch` now; pgvector later |\n| **relational** | `RelationStore` | store + traverse relationships | Mongo now; **Neo4j** later |\n\nServices depend only on the ports. A **transformation layer (mapper) inside each adapter** converts domain records to and from that store's representation, and the domain never sees a store type.\n\n## Choosing an adapter is configuration, not code\n\n```yaml\ncontextrag:\n  store:\n    units:     mongo     # mongo | pgvector | ...\n    relations: mongo     # mongo | neo4j | ...\n```\n\n## Why Mongo-for-relationships is legitimate here\n\nAn earlier position in the discussion was that using Mongo for relationships is a misuse to avoid. **That was wrong in context.** Behind the `RelationStore` port, Mongo-as-relational is a legitimate configured choice — and it is today's reality. The port is precisely what stops that pragmatic choice from becoming debt: switching to Neo4j becomes a new adapter plus a config flip, with domain and services untouched.\n\n## The scoping trap to avoid\n\n**A port is only honourable if every adapter can satisfy it.**\n\n- Define `RelationStore` with rich graph traversal now → Mongo cannot honour it, and the abstraction is a lie.\n- Define retrieval as pure vector similarity forever → Neo4j gets reduced to a dumb index later, discarding the reason for switching.\n\nThe resolution: keep each port scoped to what the domain needs **today**, and add a graph-shaped capability in Phase 2 when traversal is the actual requirement. The adapter design protects the mechanical swap; it does not retroactively grant graph superpowers.",
+          "tags": [
+            "domain",
+            "persistence"
+          ],
+          "storyIds": [
+            "CTXR-11",
+            "CTXR-4"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:03.064Z",
+          "updated": "2026-07-29T23:06:03.064Z"
+        },
+        {
+          "id": "PG-026",
+          "title": "Enforcing the boundary & deferred concerns",
+          "parentId": "PG-001",
+          "body": "Good intentions leak. This page covers how the domain boundary is *checked*, and what is consciously postponed.\n\n## ArchUnit as a build gate\n\nAn **ArchUnit test fails the build** if anything in the domain packages imports `springframework.data` or a driver package.\n\nThat turns \"the core has no knowledge of the adapter\" from a principle into a **checked invariant**. The distinction matters: a documented principle survives until the first deadline, whereas a failing build is not negotiable.\n\nThe same technique extends to the ingestion side — the domain and services must not import a source-specific client (GitHub, JGit) either.\n\n## What leaks look like in practice\n\nThe most common leak is not an obvious import but an annotation: putting `@Document` or `@Id` on the domain entity. The \"domain\" then secretly knows about Mongo, and nothing in review reliably catches it. Hence the separate persistence entity **inside** the adapter, with mapping at the boundary.\n\nThe second most common is a port method that returns a driver type — a `Document`, a cursor, an `ObjectId`. Ports return domain objects, always.\n\n## Deliberately deferred\n\n**Dual-write consistency.** Once ingestion writes to *two* stores, there is a distributed-write problem: the vector write succeeds, the graph write fails. Options when it matters: idempotent re-ingest, ordering guarantees, or an outbox. **Not built now** — in Phase 1 only the semantic store exists, so there is nothing to reconcile. Flagged as a Phase 2 concern rather than designed for speculatively.\n\n**Rich graph traversal.** Phase 2, alongside the Neo4j adapter.\n\n## Why deferral is recorded rather than silent\n\nAn undocumented deferral is indistinguishable from an oversight. Writing it down means a future session can tell that dual-write was *considered and postponed*, not missed — and knows what to reach for when it becomes real.",
+          "tags": [
+            "domain",
+            "testing"
+          ],
+          "storyIds": [
+            "CTXR-11"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:03.071Z",
+          "updated": "2026-07-29T23:06:03.071Z"
+        },
+        {
+          "id": "PG-027",
+          "title": "Open inputs (Q1–Q4)",
+          "parentId": "PG-001",
+          "body": "CTXR-11's acceptance criteria are marked **draft** and stay that way until these are answered. They are logged as Q-001 to Q-004 in the Questions lane.\n\nThe reason for blocking on them: the right domain model follows from the questions it has to answer. Guessing the model first and hoping the queries fit is how the prototype's shape happened.\n\n## Q1 — Granularity\n\n**What code-unit granularity proved useful — file, class, method, or a semantic chunk — and where did that choice hurt?**\n\nThis determines what `CodeUnit` actually *is*. Too coarse and retrieval returns noise; too fine and relationships explode in number while losing meaning.\n\n## Q2 — Relationship types\n\n**Which relationship types actually earned their keep, and which were added but never used?**\n\nCandidates: calls, imports, implements, produces-topic, consumes-topic, provides-endpoint, calls-endpoint. The unused ones matter as much as the used ones — every edge type is ingestion cost and schema surface.\n\n## Q3 — The real queries\n\n**Which real queries did the prototype answer badly?**\n\nThe most valuable of the four. These queries should drive the port design directly, rather than being inferred from the model. A port designed against real failing queries is testable; one designed against imagined queries is decoration.\n\n## Q4 — What to discard\n\n**What in the prototype felt structurally wrong in hindsight and should be discarded?**\n\nExplicitly inviting subtraction. A rebuild's advantage is the freedom to *not* carry something, and that advantage is lost by default unless someone names what to drop.\n\n## Standing constraint on the answers\n\nThe prototype is a **learning source, not a schema**. Answers should describe what was learned about the problem, not what the collections looked like.",
+          "tags": [
+            "open-questions",
+            "domain"
+          ],
+          "storyIds": [
+            "CTXR-11"
+          ],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:03.076Z",
+          "updated": "2026-07-29T23:06:03.076Z"
+        },
+        {
+          "id": "PG-028",
+          "title": "The story delivery loop",
+          "parentId": "PG-009",
+          "body": "Every unit of work is a DevTracker story. Five steps, in order.\n\n## 1. Refer to the story in DevTracker\n\nRead the description, acceptance criteria, dependencies and any prior session notes. Confirm it is unblocked — every `dependsOn` story is done. **Never start from memory**; the tracker is the source of truth and it may have moved since you last looked.\n\n## 2. Cut a feature branch from `master`\n\nNamed for the story: `feature/<TICKET-ID>-<slug>` — e.g. `feature/CTXR-2-mongodb-configuration`. Small and single-purpose. If a story grows mid-flight, split it in DevTracker rather than letting one branch sprawl.\n\n## 3. Work it to completion\n\nImplement until *every* acceptance criterion is genuinely met. **Tick each criterion in DevTracker as it is verified — one at a time, not batched at the end.** Batching at the end loses the information about what was verified when, which is exactly what a later session needs.\n\n## 4. Record the timeline\n\nWhen the definition of done is met: mark the story done, log a **milestone** with a distilled summary and key artifacts, append a **session log** with next steps, and capture any **decisions** made along the way.\n\nDistilled, not raw — a milestone summary is for a future reader, not a transcript.\n\n## 5. Raise a PR\n\nMerged only after approval. The PR description states *what*, *why*, *how*, the ticked criteria, and anything the reviewer should look at closely — including work deliberately left out of scope.\n\n## Why this order\n\nSteps 1 and 4 are what make the loop closed rather than linear. Skipping step 1 means re-deriving context; skipping step 4 means the next session has to.",
+          "tags": [
+            "process"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:49.856Z",
+          "updated": "2026-07-29T23:06:49.856Z"
+        },
+        {
+          "id": "PG-029",
+          "title": "Definition of Ready for PR",
+          "parentId": "PG-009",
+          "body": "The pre-review checklist. **Every item exists because a review caught its absence** — this is a list of mistakes already made, not generic best practice.\n\n## The checklist\n\n- [ ] Acceptance criteria met and verified; tests pass (`mvn -q verify`).\n- [ ] **No blocking I/O on request threads** — bounded executor with a timeout.\n- [ ] **Observability present** — metrics exposed for new components.\n- [ ] **Optional features configurable** — enable flag plus tunables.\n- [ ] **Structured logging** — every catch/timeout path logs the exception.\n- [ ] **Clean package structure** from the first commit.\n- [ ] **Persistence store-independent** — no store types past the adapter (ADR-007).\n- [ ] Secrets externalised via env; nothing hardcoded.\n- [ ] `README.md`, `PROGRESS.md` and DevTracker updated.\n\n## Provenance\n\n| Item | Where it came from |\n|---|---|\n| Observability present | CTXR-2 shipped without metrics; review asked \"where is observability?\" |\n| No blocking I/O | The Mongo ping ran inline on the servlet thread |\n| Configurable | The ping was hardcoded always-on |\n| Structured logging | The catch block swallowed the exception into a 503 body |\n| Clean packages | Everything sat flat in `com.contextrag` |\n| Store-independent | Became explicit when database independence was raised |\n\n## How to use it\n\nRun it **before** opening the PR, not as a review response. The point is to move these findings earlier — a reviewer catching them is a slower, more expensive path to the same code.\n\n## The gap\n\nThere is **no CI**, so \"tests pass\" is currently a manual local step. That makes this checklist a discipline rather than a gate — the weakest part of the workflow as it stands.",
+          "tags": [
+            "process",
+            "checklist"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:49.863Z",
+          "updated": "2026-07-29T23:06:49.863Z"
+        },
+        {
+          "id": "PG-030",
+          "title": "Commit & testing conventions",
+          "parentId": "PG-009",
+          "body": "## Commits\n\n- Small, logical commits — **each one should build**.\n- **Conventional-commit** subjects: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`. Reference the ticket where useful: `feat(CTXR-2): add MongoDB connection config`.\n- Imperative mood (\"add\", not \"added\"), ~72-character subject, body for the *why* when it is not obvious from the diff.\n- **Never commit secrets**, API keys or `.env` files.\n- **Squash-merge** feature branches so `master` reads one commit per story.\n\n## Testing\n\n- Every story ships tests that exercise its acceptance criteria. **A criterion isn't done until something verifies it.**\n- Prefer fast, deterministic unit tests. Add integration tests where a real MongoDB or the embedding API materially changes behaviour.\n- When fixing a bug, **write the failing test first**, then fix. Otherwise you are guessing that you reproduced it.\n- Green tests are a merge gate, not an afterthought.\n\n## What \"verified\" means in practice\n\nThree levels, in descending order of confidence:\n\n1. An automated test asserts it.\n2. A command was run and its output inspected (e.g. `curl` against a live endpoint).\n3. The code was read and looks correct.\n\nLevel 3 is not verification. CTXR-2's criteria were ticked at level 2 for the runtime behaviour and level 3 for compilation — which is precisely why \"confirm with `mvn -q verify` locally\" appeared in that PR description rather than being silently assumed.\n\n## Current shortfall\n\nCTXR-1 and CTXR-2 shipped with a context-load test only. No test covers the ping endpoint's async or timeout behaviour, and nothing covers configuration binding. Worth closing before the codebase grows.",
+          "tags": [
+            "process",
+            "testing"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:49.869Z",
+          "updated": "2026-07-29T23:06:49.869Z"
+        },
+        {
+          "id": "PG-031",
+          "title": "Process lessons paid for in real time",
+          "parentId": "PG-009",
+          "body": "Mistakes that cost real hours, recorded so they are not repeated.\n\n## Create GitHub repos empty\n\nCreating the repo **with** the auto-generated README gave remote `master` an \"Initial commit\" that shared **no history** with the local work. Consequence: the PR had a base it could not merge into, and the merge button was simply greyed out with no obvious explanation. Diagnosis took several rounds; the fix was a force-push of the real `master`.\n\n**Rule:** create repos with no README, no `.gitignore`, no license. Push your own history first.\n\n## Push `master` before opening a PR\n\nA PR needs its base branch to exist on the remote. Obvious in hindsight, non-obvious while staring at a disabled button.\n\n## Run tools from source during development\n\nThe installed DevTracker `.dmg` (built 19 July) carried a **duplicate function declaration** — a hard `SyntaxError` that aborted the module before any click handler bound, so *every button was dead*. The source had been fixed on 21 July. The app being launched was two days stale.\n\n**Rule:** run from source (`npm run start:local`) during active development; rebuild the packaged app only at milestones. A launcher script now exists so the right command is the easy one.\n\n**Generalised:** when a UI is completely inert, suspect a load-time error before suspecting logic. And check *which build* is running before debugging its behaviour.\n\n## Commit finished work promptly\n\nRoughly **2,000 lines** of completed Playground and Coder work sat uncommitted, and was nearly stashed while clearing the tree for unrelated changes. Finished work living only in a working tree is one careless command from gone.\n\n## The meta-lesson\n\nThree of these four were **environment** problems, not code problems, and each presented as something else — a broken merge button, a dead UI, a dirty tree. Verifying what you are actually running is cheaper than debugging what you assume you are running.",
+          "tags": [
+            "process",
+            "lessons"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:06:49.874Z",
+          "updated": "2026-07-29T23:06:49.874Z"
+        },
+        {
+          "id": "PG-032",
+          "title": "Phase 2 — cross-service intelligence (Shape B)",
+          "parentId": "PG-003",
+          "body": "Phase 1 (Shape A) makes one service's context queryable. **Phase 2 is where the actual value is** — letting an agent understand how services *relate*, not just what one service's code says.\n\nNot started. Recorded now so Phase 1 decisions don't foreclose it.\n\n## Scope (~12 stories)\n\n| Area | What it delivers |\n|---|---|\n| **Kafka edge detection** | Identify producers and consumers per topic during code ingestion |\n| **HTTP edge detection** | Identify endpoint providers and callers |\n| **Dependency graph + traversal** | A cross-service graph with traversal tools (\"who calls this endpoint?\", \"what breaks if this changes?\") |\n| **Review session cache** | Stop re-fetching the same context across stories in one review |\n| **Hybrid search** | Combine semantic and lexical retrieval |\n| **Multi-provider embeddings** | Remove single-vendor coupling |\n| **Production hardening** | Whatever running this for a team requires |\n\n## Why it is deferred, not skipped\n\nShipping a usable single-service reviewer first is a deliberate constraint. A cross-service graph on top of an unproven retrieval layer would mean debugging two unknowns at once.\n\n## The hard part, stated honestly\n\nStatic detection of Kafka and HTTP edges is **genuinely difficult** — dynamic topic names, wrapper layers, indirection, configuration-driven wiring. The mitigation is to scope detection to the conventions of the actual codebases in play rather than aiming for general correctness. Aiming for general correctness is how this phase becomes unshippable.\n\n## What Phase 1 must not foreclose\n\n- **The relational port** (`RelationStore`) exists from CTXR-11 so relationships have a home before the graph store arrives.\n- **Stable `CodeUnitId`** shared across stores, so graph nodes and vector records can be correlated.\n- **Dual-write consistency** is a Phase 2 concern, but the seam for it is the port introduced in Phase 1.\n\n## Where the graph store fits\n\nNeo4j arrives as a `RelationStore` adapter. Note the honest limitation: swapping the store does not retroactively grant graph capability — **the capability comes from adding graph-shaped operations to the port**, which is Phase 2 work by definition.",
+          "tags": [
+            "phase-2",
+            "roadmap"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:07:17.772Z",
+          "updated": "2026-07-29T23:07:17.772Z"
+        },
+        {
+          "id": "PG-033",
+          "title": "Glossary",
+          "parentId": "PG-003",
+          "body": "Terms that recur across these pages and in DevTracker.\n\n## Project shapes and phases\n\n- **Shape A / Phase 1** — the minimum viable context server: single-service context, ~11 stories. What is being built now.\n- **Shape B / Phase 2** — cross-service intelligence: edge detection, dependency graph, session cache, hybrid search.\n- **MVP 1** — the earlier office prototype (ContextVectorDB). Learnings inherited, code and schema not.\n- **MVP 2** — what this project (CTXR) became.\n\n## Domain\n\n- **`CodeUnit`** — a unit of code carrying semantic content. Granularity is still open (Q1).\n- **`CodeRelationship`** — an edge between code units: `from`, `to`, `type`.\n- **`CodeUnitId`** — stable identity shared by every store, so the vector record and the graph node refer to the same thing.\n\n## Ports and adapters\n\n- **Port** — an interface owned by the domain. Services depend on ports only.\n- **Adapter** — an implementation of a port for one concrete technology. Adapters know the domain; the domain never knows adapters.\n- **`CodeUnitStore`** — the *semantic* port: index and similarity search.\n- **`RelationStore`** — the *relational* port: store and traverse relationships.\n- **`CodeSource` / `TicketSource` / `DocSource`** — ingestion ports (GitHub / Issues / Markdown in Phase 1; Bitbucket / JIRA / Confluence at the office).\n- **Transformation layer** — the mapper inside an adapter converting domain ⇄ store representation.\n\n## Context vocabulary\n\n- **Tier 1 / 2 / 3 context** — service-level / cross-service contracts / architectural decisions.\n- **Genericness** — the real failure mode of a context-starved model: not wrong answers, but bland ones. Distinct from hallucination.\n- **Token wall** — the point where pre-loading context exhausts the window. The core argument for retrieval.\n\n## Tooling\n\n- **DevTracker** — the engineering workspace holding stories, decisions, milestones and Atlas; exposed to agents over MCP.\n- **Atlas** — DevTracker's knowledge layer. These pages.\n- **MCP** — Model Context Protocol, the interface agents use to reach both systems.",
+          "tags": [
+            "reference"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:07:17.783Z",
+          "updated": "2026-07-29T23:07:17.783Z"
+        },
+        {
+          "id": "PG-034",
+          "title": "Tooling — DevTracker & Atlas",
+          "parentId": "",
+          "body": "The project's memory layer, and the reason no session needs re-explaining. Recorded here because how the tracker is *used* is itself project knowledge.\n\n## The problem it solves\n\nEach agent session starts cold. Without a persistent store, every session re-derives the project — or worse, contradicts a decision made two sessions ago. Chat scrolls away; a tracker does not.\n\nThe test of whether it works: **a cold session should be able to start productive work with no human explanation.**\n\n## Design principle\n\n**One JSON file on disk is the single source of truth.** The MCP server reads and writes it; the app renders it. No copy-paste anywhere — agent and human look at the same state.\n\nThis replaced an earlier arrangement where tracker state lived in browser storage the agent could not reach, which meant the human was the transport layer between the two.\n\n## The three self-description mechanisms\n\n1. **Rich MCP tool descriptions** — delivered by the protocol automatically on connect. This is the primary explanation.\n2. **A briefing tool** — called once at session start for the project overview, working rules, story list and settled decisions.\n3. **A `CLAUDE.md` at the repo root** — read automatically every session, telling the agent the tracker exists and to bootstrap from it.\n\nTogether: open the repo, and the agent already knows what DevTracker is and uses it.\n\n## Subpages\n\n- **DevTracker MCP tools** — what an agent can read and write.\n- **Atlas — how to use it** — page conventions, and what belongs here versus in a decision or a ticket.\n\n## Local setup\n\nThe live store is `~/Documents/DevTracker/workspace.json`, set via `DEVTRACKER_STORE`. Launch with `npm run start:local` (or the `start-devtracker.command` launcher) so the app, the MCP server and the agent all share one file.",
+          "tags": [
+            "tooling",
+            "devtracker"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:07:52.930Z",
+          "updated": "2026-07-29T23:07:52.930Z"
+        },
+        {
+          "id": "PG-035",
+          "title": "DevTracker MCP tools",
+          "parentId": "PG-034",
+          "body": "What an agent can do with the tracker. Thirteen tools; the descriptions themselves are the documentation the agent receives.\n\n## Reading\n\n| Tool | Use |\n|---|---|\n| `get_briefing` | **Call first, every session.** Constraints, decided + proposed decisions, open questions, milestones, next unblocked ticket, recent activity, Atlas page outline. |\n| `query_context_db` | Search tickets, decisions, milestones, questions and ingested content. `project_id: \"*\"` searches everything. |\n\n## Writing project state\n\n| Tool | Use |\n|---|---|\n| `update_acceptance_criteria` | Tick criteria (1-based), set status, append a session note. |\n| `capture_decision` | Record a decision **as a proposal**, with options, pros and cons. |\n| `discuss_decision` | Add an argument to a decision's debate thread. |\n| `flag_milestone` | Log a completed feature with a distilled summary and artifacts. |\n\n## Atlas\n\n`atlas_list_pages`, `atlas_get_page`, `atlas_create_page`, `atlas_update_page`, `atlas_comment_page`, `atlas_add_diagram`, `atlas_link_story`.\n\n## The rule that shapes all of it\n\n**Agents propose; the Tech Lead decides.** `capture_decision` forces status to `proposed` and refuses to set a choice — the human decides in the UI. `discuss_decision` can argue but cannot conclude. This is enforced in code, not convention, because an agent that can settle its own decisions defeats the purpose of a decision log.\n\nThe same principle applies to git: the agent branches, commits and opens PRs, but **never merges**.\n\n## Operational note\n\nThe MCP server must be restarted to pick up newly added tools — they are advertised on connect, so a running session will not see them.",
+          "tags": [
+            "tooling",
+            "mcp"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:07:52.940Z",
+          "updated": "2026-07-29T23:07:52.940Z"
+        },
+        {
+          "id": "PG-036",
+          "title": "Atlas — how to use it",
+          "parentId": "PG-034",
+          "body": "Conventions for these pages, so the knowledge base stays useful as it grows.\n\n## What Atlas is for\n\nDurable knowledge that **outlives a ticket**: domain models, structural decisions, discussions that settled into prose, project history. If it will still be true and still be needed in three months, it belongs here.\n\n## Body vs thread\n\n- The **body** is the settled position — written as though the reader has no history.\n- The **comment thread** is the debate that produced it, attributed to Tech Lead or Agent.\n\nWhen a thread concludes, **fold the conclusion into the body**. A page whose truth is buried in comment 14 has failed at its job.\n\n## What belongs where\n\n| Content | Home |\n|---|---|\n| A choice with options and trade-offs | A **decision** (ADR), not a page |\n| What must be built, with acceptance criteria | A **story** |\n| An unanswered question blocking work | A **question** (Q-nnn) |\n| The reasoning, model, or history behind those | **An Atlas page** |\n\nPages should *reference* decisions and stories rather than duplicating them — duplicated content drifts, and the copy is always the one someone reads.\n\n## Page conventions\n\n- **One topic per page.** If a page needs three unrelated `##` sections, it is three pages with a parent.\n- **Nest for hierarchy**, and keep the parent a short hub that says what its children cover.\n- **Link stories** so a ticket carries its background. One page can inform many stories.\n- **Prefer a diagram** over prose for structure or flow. Diagrams are page-owned; draw.io ones open in diagrams.net for editing.\n- **Tag** for cross-cutting themes (`process`, `domain`, `history`).\n\n## For agents\n\nCall `atlas_list_pages` before writing — **extend the right page rather than creating a near-duplicate**. Bodies are Markdown and render escape-first, so no raw HTML.",
+          "tags": [
+            "tooling",
+            "atlas",
+            "conventions"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:07:52.956Z",
+          "updated": "2026-07-29T23:07:52.956Z"
+        },
+        {
+          "id": "PG-037",
+          "title": "Lab — capturing raw thoughts",
+          "parentId": "PG-034",
+          "body": "A capture inbox for unprocessed material: ideas, suspected anti-patterns, observations, gotchas — mostly learnings from the office MVP that arrive faster than they can be processed.\n\n## The problem it solves\n\nRaw thoughts and settled decisions look identical in a knowledge base. Without an explicit status, an agent reading \"maybe we should drop Mongo\" cannot tell a musing from direction — and will act on it.\n\nStorage was never the issue. **Status is.**\n\n## How it works\n\nNotes have a **kind** (idea / anti-pattern / observation / gotcha) and a **status**:\n\n```\nraw  →  triaged  →  promoted   (became an ADR / story / question / Atlas page)\n                 →  discarded  (with a reason, so it is not re-raised)\n```\n\n- **raw** — captured, unprocessed, no authority.\n- **triaged** — read and kept, no action yet.\n- **promoted** — records the **id it became**, preserving the trail from thought to artifact.\n- **discarded** — requires a **reason**. A discard without one is just deletion, and next month it comes back.\n\n## What the agent sees\n\nRaw notes appear in `get_briefing` under `lab_notes`, always with a disclaimer stating they are unvetted, may be wrong or contradictory, and must not override a decision or constraint. The same text rides along with `lab_list_notes`, so it is present wherever the notes are — not just in the tool description.\n\nThis is what makes it safe to dump half-formed thoughts in: they are visible enough to be useful, labelled clearly enough to be inert.\n\n## Note vs decision vs story\n\n| | Authority | Home |\n|---|---|---|\n| **Note** | None — a thought | Lab |\n| **Decision** | Settled choice, binding | Decisions (ADR) |\n| **Story** | Work to be done, with criteria | Workspace |\n| **Question** | Explicitly blocking work | Questions |\n\nNever record a settled choice as a note; never leave a real decision sitting raw.\n\n## Capture discipline\n\nDon't polish. Raw is the point — the cost of capture must stay near zero or thoughts go unrecorded. Triage is a separate, later activity, and reviewing the raw pile is a reasonable way to open a session.",
+          "tags": [
+            "tooling",
+            "lab",
+            "conventions"
+          ],
+          "storyIds": [],
+          "diagrams": [],
+          "comments": [],
+          "created": "2026-07-29T23:17:48.978Z",
+          "updated": "2026-07-29T23:17:48.978Z"
+        }
+      ],
+      "selectedTicketId": "CTXR-3",
+      "notes": [
+        {
+          "id": "LAB-001",
+          "kind": "anti-pattern",
+          "text": "Silent fallback when a page limit was hit — the system quietly returned partial data with no log. Indistinguishable from correct behaviour until the data was wrong. Any fallback must be loud.",
+          "source": "office MVP",
+          "tags": [],
+          "status": "raw",
+          "promotedTo": "",
+          "reason": "",
+          "created": "2026-07-29T23:17:48.931Z",
+          "updated": "2026-07-29T23:17:48.931Z"
+        },
+        {
+          "id": "LAB-002",
+          "kind": "anti-pattern",
+          "text": "Comparing a string by reference instead of value. Cheap bug, expensive to find. Worth a lint rule rather than vigilance.",
+          "source": "office MVP",
+          "tags": [],
+          "status": "raw",
+          "promotedTo": "",
+          "reason": "",
+          "created": "2026-07-29T23:17:48.943Z",
+          "updated": "2026-07-29T23:17:48.943Z"
+        },
+        {
+          "id": "LAB-003",
+          "kind": "anti-pattern",
+          "text": "\"Batching\" that did not actually batch — the interface implied batching while the implementation looped one at a time. Naming promised something the code did not do.",
+          "source": "office MVP",
+          "tags": [],
+          "status": "raw",
+          "promotedTo": "",
+          "reason": "",
+          "created": "2026-07-29T23:17:48.951Z",
+          "updated": "2026-07-29T23:17:48.951Z"
+        },
+        {
+          "id": "LAB-004",
+          "kind": "observation",
+          "text": "Relationships were modelled as Mongo documents purely because Mongo was the only store available, with no domain layer in between. The compromise was invisible until a graph store became desirable.",
+          "source": "office MVP",
+          "tags": [],
+          "status": "raw",
+          "promotedTo": "",
+          "reason": "",
+          "created": "2026-07-29T23:17:48.960Z",
+          "updated": "2026-07-29T23:17:48.960Z"
+        },
+        {
+          "id": "LAB-005",
+          "kind": "idea",
+          "text": "Context disclosure enforcement: make the agent state which context it actually used. Turns \"did it use the right context?\" from a guess into something observable. Might be the cheapest quality lever available.",
+          "source": "office MVP",
+          "tags": [],
+          "status": "raw",
+          "promotedTo": "",
+          "reason": "",
+          "created": "2026-07-29T23:17:48.968Z",
+          "updated": "2026-07-29T23:17:48.968Z"
+        }
+      ]
+    }
+  ],
+  "prompts": []
+}

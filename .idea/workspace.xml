@@ -4,19 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="c324846b-4eae-4c91-aa47-16ecaa22c423" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/PROJECT_STATUS.md" beforeDir="false" afterPath="$PROJECT_DIR$/PROJECT_STATUS.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/css/styles.css" beforeDir="false" afterPath="$PROJECT_DIR$/css/styles.css" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/js/app.js" beforeDir="false" afterPath="$PROJECT_DIR$/js/app.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/js/orchestrator/orchestrator.js" beforeDir="false" afterPath="$PROJECT_DIR$/js/orchestrator/orchestrator.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/js/orchestrator/router.js" beforeDir="false" afterPath="$PROJECT_DIR$/js/orchestrator/router.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.js" beforeDir="false" afterPath="$PROJECT_DIR$/main.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/preload.js" beforeDir="false" afterPath="$PROJECT_DIR$/preload.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/store/workspace-store.js" beforeDir="false" afterPath="$PROJECT_DIR$/store/workspace-store.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test/store.test.js" beforeDir="false" afterPath="$PROJECT_DIR$/test/store.test.js" afterDir="false" />
-    </list>
+    <list default="true" id="c324846b-4eae-4c91-aa47-16ecaa22c423" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />

@@ -300,6 +300,7 @@ function normalizeWorkspace(ws) {
     p.journeys = (Array.isArray(p.journeys) ? p.journeys : []).map(normalizeJourney);
     p.pages = repairPageTree((Array.isArray(p.pages) ? p.pages : []).map(normalizePage));
     p.notes = (Array.isArray(p.notes) ? p.notes : []).map(normalizeNote);
+    p.problemStatement = normalizeProblem(p.problemStatement);
     if (p.architecture?.content && !p.architecture.migratedToDiagrams) {
       const fmt =
         p.architecture.type === 'svg'
@@ -544,6 +545,7 @@ function renderAll() {
   renderNextUp();
   renderTicket();
   renderContext();
+  renderProblem();
   renderAtlas();
   renderLab();
   renderArchitecture();
@@ -2558,6 +2560,95 @@ function mdToHtml(src) {
 
 function atlasTouch(page) {
   page.updated = new Date().toISOString();
+}
+
+function normalizeProblem(ps) {
+  ps = ps && typeof ps === 'object' ? ps : {};
+  return {
+    body: typeof ps.body === 'string' ? ps.body : '',
+    updated: ps.updated || '',
+    comments: (Array.isArray(ps.comments) ? ps.comments : []).map(c => ({
+      role: c && ['lead', 'reviewer', 'agent'].includes(c.role) ? c.role : 'agent',
+      text: c && c.text != null ? String(c.text) : '',
+      ts: (c && c.ts) || '',
+    })),
+  };
+}
+
+const PROBLEM_ROLE_LABEL = { lead: 'Tech Lead', reviewer: 'Fable 5', agent: 'Agent' };
+let problemEditing = false;
+function renderProblem() {
+  const project = activeProject();
+  const el = $('#problemView');
+  if (!el) return;
+  if (!project.problemStatement) project.problemStatement = normalizeProblem();
+  const ps = project.problemStatement;
+
+  el.innerHTML = `<div class="view-head"><div><p class="eyebrow">FRAMING</p><h1>Problem Statement</h1><p class="subcopy">The refined problem, the refined solution, and the top design concerns — with an inline discussion thread. Separate from the Atlas knowledge tree.</p></div><button class="button" id="problemEditToggle">${
+    problemEditing ? 'View' : 'Edit'
+  }</button></div>
+  ${
+    problemEditing
+      ? `<form id="problemEditForm">
+           <div class="field"><label>Body (Markdown)</label><textarea name="body" rows="26">${esc(
+             ps.body
+           )}</textarea></div>
+           <div class="dialog-actions"><button class="button" type="button" id="problemEditCancel">Cancel</button><button class="button primary">Save</button></div>
+         </form>`
+      : `<article class="atlas-body">${
+          ps.body
+            ? mdToHtml(ps.body)
+            : '<p class="subcopy">No problem statement yet. Click <strong>Edit</strong> to add one.</p>'
+        }</article>`
+  }
+  <h3 class="atlas-sub">Discussion</h3>
+  <div class="atlas-thread">${
+    ps.comments.length
+      ? ps.comments
+          .map(
+            c =>
+              `<div class="atlas-comment ${esc(c.role)}"><p class="list-meta">${
+                PROBLEM_ROLE_LABEL[c.role] || 'Agent'
+              }${c.ts ? ` · ${esc(String(c.ts).slice(0, 10))}` : ''}</p><p>${esc(c.text)}</p></div>`
+          )
+          .join('')
+      : '<p class="subcopy">No discussion yet.</p>'
+  }</div>
+  <form id="problemCommentForm" class="atlas-comment-form">
+    <textarea name="text" rows="3" placeholder="Add to the discussion…" required></textarea>
+    <button class="button primary">Comment</button>
+  </form>`;
+
+  $('#problemEditToggle').onclick = () => {
+    problemEditing = !problemEditing;
+    renderProblem();
+  };
+  if (problemEditing) {
+    $('#problemEditCancel').onclick = () => {
+      problemEditing = false;
+      renderProblem();
+    };
+    $('#problemEditForm').onsubmit = e => {
+      e.preventDefault();
+      ps.body = String(new FormData(e.target).get('body') || '');
+      ps.updated = new Date().toISOString();
+      logActivity(project, 'problem', 'Problem statement updated');
+      problemEditing = false;
+      save();
+      renderAll();
+      toast('Problem statement saved.');
+    };
+  }
+  $('#problemCommentForm').onsubmit = e => {
+    e.preventDefault();
+    const text = String(new FormData(e.target).get('text') || '').trim();
+    if (!text) return;
+    ps.comments.push({ role: 'lead', text, ts: new Date().toISOString() });
+    ps.updated = new Date().toISOString();
+    logActivity(project, 'problem', `Problem comment: ${text.slice(0, 60)}`);
+    save();
+    renderAll();
+  };
 }
 
 function renderAtlas() {
@@ -5662,6 +5753,7 @@ function setView(view) {
     'home',
     'map',
     'context',
+    'problem',
     'atlas',
     'lab',
     'architecture',
