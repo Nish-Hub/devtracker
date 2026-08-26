@@ -29,8 +29,9 @@ export async function orchestrate(request, deps) {
   });
 
   const registry = createRegistry(request.providers || []);
-  const { candidates, needsConsent } = route(classification, registry, {
+  const { candidates, needsConsent, underProvisioned } = route(classification, registry, {
     policy: deps.policy || 'hard',
+    bestEffort: deps.bestEffort,
   });
 
   if (!candidates.length) {
@@ -64,6 +65,7 @@ export async function orchestrate(request, deps) {
     maxAttempts: deps.maxAttempts,
   });
   out.routing.needsConsent = needsConsent;
+  out.routing.underProvisioned = underProvisioned;
   out.classification = classification;
   return out;
 }
